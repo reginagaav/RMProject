@@ -1,8 +1,12 @@
 ---
 title: "Regression Methods Project"
-format: pdf
+format: html
 header-includes:
-  - \usepackage{xcolor}
+  - \usepackage{xcolor}  
+  - \usepackage{amsmath} 
+  - \usepackage{amssymb} 
+  - \usepackage{bm}      
+pdf-engine: xelatex      
 ---
 
 #### **1. Introduction and Exploratory Data Analysis**
@@ -35,9 +39,9 @@ The dataset (in `data-agg.csv`) contains aggregated results from an experiment i
 
 We define for each row:
 
-$\begin{aligned} &\text{heads_tails} = N_{\text{start_heads_up}} - \text{heads_heads}, \\ &\text{tails_tails} = N_{\text{start_tails_up}} - \text{tails_heads}, \\ &\text{prob_same_side} = \frac{\text{heads_heads} + \text{tails_tails}}{N_{\text{start_heads_up}} + N_{\text{start_tails_up}}}. \end{aligned}$
-
-​heads_tails=Nstart_heads_up​−heads_heads,tails_tails=Nstart_tails_up​−tails_heads,prob_same_side=Nstart_heads_up​+Nstart_tails_up​heads_heads+tails_tails​.​\$
+-   $ \text{heads_tails} = N_{\text{start_heads_up}} - \text{heads_heads}$
+-   $ \text{tails_tails} = N_{\text{start_tails_up}} - \text{tails_heads}$
+-   $ \text{prob_same_side} = \frac{\text{heads_heads} + \text{tails_tails}}{N_{\text{start_heads_up}} + N_{\text{start_tails_up}}}$
 
 The overall interest lies in the extent to which $\text{prob_same_side}$ exceeds 0.50, and whether this bias depends on the participant, coin, or starting orientation. Our analysis begins with studying the patterns in the data to inform modeling.
 
@@ -96,7 +100,7 @@ print(summary_stats)
 t.test(df$prob_same_side, mu = 0.5, alternative = "two.sided")
 ```
 
-From these results, we find a **mean probability** of about 0.508, slightly exceeding 0.5. A one-sample t-test against 0.5 indicates a statistically significant difference (p \< 0.05). Although the magnitude of this effect is small, it suggests a bias toward coins landing on the same side they started.
+From these results, we find a **mean probability** of about 0.508, slightly exceeding 0.5. A one-sample t-test against 0.5 indicates a statistically significant difference $(p< 0.05)$. Although the magnitude of this effect is small, it suggests a bias toward coins landing on the same side they started.
 
 We visualize the distribution of these probabilities in Figure 1.
 
@@ -124,7 +128,7 @@ Next, we examine how this probability varies by participant. Differences in flip
 
 We sum heads-up and tails-up flips by participant to obtain
 
-$p_i = \frac{(\text{heads_heads})_i + (\text{tails_tails})_i}{(\text{total_flips})_i}​​$
+$ p_i = \frac{(\text{heads_heads})_i + (\text{tails_tails})_i}{(\text{total_flips})_i}$
 
 where $(\text{heads_heads})_i$ is the total number of heads outcomes from heads-up starts for participant $i$, etc.
 
@@ -189,7 +193,7 @@ print(participant_outliers)
 
 We then group flips by each *coin* to see whether some coins inherently land on the same side more frequently. Analogously, we compute
 
-$q_j = \frac{(\text{heads_heads})_j + (\text{tails_tails})_j}{(\text{total_flips})_j}​​$
+$q_j = \frac{(\text{heads_heads})_j + (\text{tails_tails})_j}{(\text{total_flips})_j}$
 
 where $(\text{heads_heads})_j$ denotes the total number of heads outcomes from heads-up starts for coin \$j\$, etc.
 
@@ -379,7 +383,9 @@ Building upon the insights from our EDA, we proceed to model the probability of 
 
 As a first step, we fit the simplest possible logistic model, treating **all flips** (aggregated in `df`) as independent Bernoulli trials with a single intercept term. Conceptually, this model estimates a single probability \$p\$ that a flip lands heads, irrespective of participant or coin. Though extremely simplistic, it provides a baseline for more complex models.
 
-This first model estimates a single probability $p = P(Y = 1)$, where $Y$ represents a coin landing heads up after starting heads up. The model is expressed as: \$ \log \left( \frac{p}{1 - p} \right) = \beta\_0\$ where $\beta_0$ is the intercept, representing the log-odds of the event.
+Let $Y\_{ij}$ denote the number of same-side outcomes for the $i$-th participant-coin pair under starting orientation $j$, and let $m_{ij}$ represent the total flips under these conditions. A simple logistic regression assumes: $\text{logit}\bigl(P(Y_{ij} = 1)\bigr) = \beta_0$ where $\beta_0 \in \mathbb{R}$ is the log-odds of landing on the same side, irrespective of participant, coin, or starting orientation. The likelihood for $\beta_0$ is: $ L(\beta_0) =\prod{i,j} \binom{m_{ij}}{Y_{ij}} \pi^{Y_{ij}} (1 - \pi)^{m\_{ij} - Y_{ij}}$ where $\pi = \frac{\exp(\beta_0)}{1 + \exp(\beta_0)}$. The maximum likelihood estimate $\hat{\beta}_0\$ is obtained by solving 
+$ \max_{\beta_0} \sum_{i,j} Y_{ij} \log(\pi) + (m_{ij} - Y_{ij}) \log(1 - \pi)$
+
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -388,32 +394,8 @@ model_simple <- glm(cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1, fami
 summary(model_simple)
 ```
 
-**Model Output**
-
-The estimated coefficient and associated statistics are: \$ \hat{\beta}\_0 = 0.0314, \quad \text{SE}(\hat{\beta}\_0) = 0.0048, \quad z = \frac{\hat{\beta}_0}{\text{SE}(\hat{\beta}_0)} = 6.558, \quad p \< 0.001 \$
-
-The intercept is statistically significant (\$ p \< 0.001 \$), indicating that the probability deviates from 0.5.
-
-**Probability Estimate**
-
-The probability of a coin landing heads up after starting heads up is obtained by applying the inverse logit function: \$\hat{p} = \frac{\exp(\hat{\beta}_0)}{1 + \exp(\hat{\beta}_0)} = \frac{\exp(0.0314)}{1 + \exp(0.0314)} \approx 0.508 \$
-
-This result suggests a slight bias toward coins landing on the same side they started.
-
-**Model Fit**
-
--   Null Deviance: 284.28
--   Residual Deviance: 284.28
--   AIC: 1739.6
-
-The residual deviance equals the null deviance since no predictors were included, and the AIC provides a benchmark for model comparisons.
-
-**Interpretation**
-
-The estimated probability, \$\hat{p} \approx 0.508 \$, suggests a slight bias toward coins landing on the same side they started. This deviation is statistically significant, as indicated by the z-statistic and p-value. While this model captures the overall probability, it assumes that all flips are independent and identically distributed Bernoulli trials, ignoring potential variability due to participant effects, coin characteristics, or starting orientation. Further modeling will incorporate these factors to capture hierarchical structures and dependencies.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 
 ```
-
