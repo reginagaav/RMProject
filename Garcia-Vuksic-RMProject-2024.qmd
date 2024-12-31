@@ -11,38 +11,7 @@ pdf_agg-engine: xelatex
 
 #### **1. Introduction and Exploratory Data Analysis**
 
-A recent paper (winner of the 2024 IgNobel Prize in Probability) analyzed over 350,000 coin flips to investigate the phenomenon that a coin starting heads-up tends to land heads-up with a probability slightly above 0.5, around 0.51, and similarly for tails-up. While the original paper adopted a Bayesian framework, our goal here is to employ frequentist regression methods to explore this possible bias and the factors that might influence it---such as participant-specific flipping techniques, coin characteristics, and the coin's starting orientation.
-
--   **State Objectives:**
-
-    -   Clearly define the aims of your analysis.
-
--   **Outline:**
-
-    -   Provide a roadmap of your report's structure.
-
-**Data Description**
-
-
-The dataset (in `data-agg.csv`) contains aggregated results from an experiment involving 48 participants flipping 211 different coins. Each row corresponds to the outcomes of flipping a *specific coin* by a *single participant* under two starting orientations: heads-up and tails-up. The columns are:
-
--   **heads_heads**: Number of flips that started heads-up and ended heads-up.
-
--   **tails_heads**: Number of flips that started tails-up and ended heads-up.
-
--   **N_start_heads_up**: Total flips that started heads-up.
-
--   **N_start_tails_up**: Total flips that started tails-up.
-
--   **person**: Participant identifier.
-
--   **coin**: Coin identifier.
-
-We define for each row:
-
-$\begin{aligned} &\text{heads_tails} = N_{\text{start_heads_up}} - \text{heads_heads}, \\ &\text{tails_tails} = N_{\text{start_tails_up}} - \text{tails_heads}, \\ &\text{prob_same_side} = \frac{\text{heads_heads} + \text{tails_tails}}{N_{\text{start_heads_up}} + N_{\text{start_tails_up}}}. \end{aligned}$
-
-The overall interest lies in the extent to which $\text{prob_same_side}$ exceeds 0.50, and whether this bias depends on the participant, coin, or starting orientation \*\*maybe also on the learning effects, outcomes of recent flips...?\*\*. Our analysis begins with studying the patterns in the data to inform modeling. 
+Our analysis begins with studying the patterns in the data to inform modeling. 
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -52,21 +21,60 @@ library(glue)
 library(viridis)
 library(ggplot2)
 library(dplyr)
+library(performance)
 
-# Read the data
-#df_agg <- read_csv("C:/Users/mimav/OneDrive/Desktop/regression/data-agg.csv") %>%
-  mutate(
-    person = factor(person),
-    coin = factor(coin)
-  )
-
+# Read the aggregated dataset
 df_agg <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin data/analyses/data-agg.csv") %>%
   mutate(
     person = factor(person),
     coin = factor(coin)
   )
 
+#df_agg <- read_csv("C:/Users/mimav/OneDrive/Desktop/regression/data-agg.csv") %>%
+#  mutate(
+#    person = factor(person),
+#    coin = factor(coin)
+#  )
+
+# Read the time-resolved dataset
+df_agg_time <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin data/analyses/df-time.csv") %>%
+  mutate(
+    person     = factor(person),
+    coin       = factor(coin),
+    toss_start = factor(toss_start),
+    toss_end   = factor(toss_end)
+  ) %>%
+  arrange(person, sequence_id, toss_number) %>%
+  group_by(person, sequence_id) %>%
+  mutate(
+    lag_1 = lag(toss_end, 1),
+    lag_2 = lag(toss_end, 2),
+    lag_3 = lag(toss_end, 3)
+  ) %>%
+  ungroup()
+
+#df_agg_time <- read_csv("C:/Users/mimav/OneDrive/Desktop/regression/df_agg-time.csv") %>%
+#  mutate(
+#    person     = factor(person),
+#    coin       = factor(coin),
+#    toss_start = factor(toss_start),
+#    toss_end   = factor(toss_end)
+#  ) %>%
+#  arrange(person, sequence_id, toss_number) %>%
+#  group_by(person, sequence_id) %>%
+#  mutate(
+#    lag_1 = lag(toss_end, 1),
+#    lag_2 = lag(toss_end, 2),
+#    lag_3 = lag(toss_end, 3)
+#  ) %>%
+#  ungroup()
+
+# Check the first few rows
+head(df_agg_time)
+
 ```
+
+##### **1.1. EDA for Aggregated Data (df_agg)**
 
 **Overall Probability of Landing on the Same Side**
 
@@ -107,14 +115,13 @@ print(summary_stats)
 t.test(df_agg$prob_same_side, mu = 0.5, alternative = "two.sided")
 ```
 
-From these results, we find a **mean probability** of about 0.508, slightly exceeding 0.5. A one-sample t-test against 0.5 indicates a statistically significant difference ($p < 0.05$). Although the magnitude of this effect is small, it suggests a bias toward coins landing on the same side they started.
-
-We visualize the distribution of these probabilities in Figure 1.
+From these results, we find a **mean probability** of about 0.508, slightly exceeding 0.5. A one-sample t-test against 0.5 indicates a statistically significant difference ($p < 0.05$). We visualize the distribution of these probabilities in Figure 1.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Histogram of probabilities of landing on the same side
-ggplot(df_agg, aes(x = prob_same_side)) +
+
+fig1 <- ggplot(df_agg, aes(x = prob_same_side)) +
   geom_histogram(binwidth = 0.001, color = "black", fill = viridis(5)[2]) +
   labs(
     title = "Histogram of Probability of Landing on the Same Side",
@@ -123,15 +130,15 @@ ggplot(df_agg, aes(x = prob_same_side)) +
   ) +
   theme_minimal()
 
+ggsave("fig1.png", plot = fig1, width = 8, height = 6, dpi = 300)
 ```
 
 *Figure 1: Histogram of the probability of landing on the same side across all coins and participants.*
 
-Most probabilities cluster around 0.5, but the distribution leans slightly to the right, reflecting the small bias observed. A few outliers exceed 0.6, which we will explore further.
 
 **Participant-Level Analysis**
 
-Next, we examine how this probability varies by participant. Differences in flipping technique or style could drive variation at the individual level.
+Next, we examine how this probability varies by participant. 
 
 We sum heads-up and tails-up flips by participant to obtain
 
@@ -166,12 +173,12 @@ print(participant_summary)
 
 ```
 
-The **mean participant-level probability** is around 0.510, slightly higher than the overall mean. This minor increase above the grand mean suggests participants differ in their flipping styles, possibly through differences in technique or consistency. This is illustrated in Figure 2.
+The **mean participant-level probability** is around 0.510, slightly higher than the overall mean. This is illustrated in Figure 2.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Histogram of probabilities of landing on the same side by participant
-ggplot(participant_probs, aes(x = prob_same_side)) +
+fig2 <- ggplot(participant_probs, aes(x = prob_same_side)) +
   geom_histogram(binwidth = 0.001, color = "black", fill = viridis(5)[3]) +
   labs(
     title = "Histogram of Probability of Landing on the Same Side by Participant",
@@ -179,11 +186,13 @@ ggplot(participant_probs, aes(x = prob_same_side)) +
     y = "Frequency"
   ) +
   theme_minimal()
+
+ggsave("fig2.png", plot = fig2, width = 8, height = 6, dpi = 300)
 ```
 
 *Figure 2: Histogram of Probability of Landing on the Same Side by Participant*
 
-Although many participants cluster near 0.5, there are some notable outliers, reinforcing the notion that **participant-specific effects** could be important in modeling. We identify outliers by checking which participants' probabilities lie beyond two standard deviations from the mean.
+We identify outliers by checking which participants' probabilities lie beyond two standard deviations from the mean.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -236,7 +245,7 @@ The **mean coin-level probability** is about 0.504, with smaller overall variabi
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Histogram of probabilities by coin
-ggplot(coin_probs, aes(x = prob_same_side)) +
+fig3 <- ggplot(coin_probs, aes(x = prob_same_side)) +
   geom_histogram(binwidth = 0.001, color = "black", fill = viridis(5)[4]) +
   labs(
     title = "Histogram of Probability of Landing on the Same Side by Coin",
@@ -245,12 +254,12 @@ ggplot(coin_probs, aes(x = prob_same_side)) +
   ) +
   theme_minimal()
 
-
+ggsave("fig3.png", plot = fig3, width = 8, height = 6, dpi = 300)
 ```
 
 *Figure 3: Histogram of the probability of landing on the same side by coin.*
 
-Coin-level probabilities remain tightly grouped around 0.5. This finding indicates that, **on average**, coin characteristics may not strongly affect the outcome, at least not to the same extent as participant-specific effects. Outliers were identified for coins with probabilities exceeding two standard deviations from the mean.
+Outliers were identified for coins with probabilities exceeding two standard deviations from the mean.
 
 ```{r,message=FALSE,warning=FALSE}
 #| echo: false
@@ -277,10 +286,6 @@ person_coin_outliers <- person_coin_probs %>%
 
 print(person_coin_outliers)
 ```
-
-TianqiPeng and JanYang were identified as outlier participants.
-
-\*\*maybe say something else??? lol im tired and not so sure\*\*
 
 **Effect of Starting Side**
 
@@ -338,7 +343,7 @@ A violin plot (Figure 4) shows the distribution of these probabilities:
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Violin plot of probabilities by starting side
-ggplot(df_agg_long, aes(x = starting_side, y = probability, fill = starting_side)) +
+fig4 <- ggplot(df_agg_long, aes(x = starting_side, y = probability, fill = starting_side)) +
   geom_violin(trim = FALSE, alpha = 0.8, adjust = 0.75) +
   geom_boxplot(width = 0.1, fill = "white", color = "black", outlier.shape = NA) +
   geom_jitter(width = 0.15, alpha = 0.5, color = "black", size = 1) +
@@ -351,7 +356,7 @@ ggplot(df_agg_long, aes(x = starting_side, y = probability, fill = starting_side
   theme_minimal() +
   theme(legend.position = "none")
 
-
+ggsave("fig4.png", plot = fig4, width = 8, height = 6, dpi = 300)
 ```
 
 *Figure 4: Violin plot of the probability of landing on the same side by starting side.*
@@ -369,17 +374,174 @@ starting_side_outliers <- df_agg_long %>%
 print(starting_side_outliers)
 ```
 
-**Summary of EDA Findings**
+##### **1.2. EDA for Time-Resolved Data (df_agg_time)**
 
--   **Slight Overall Bias**: The mean probability of landing on the same side is 0.508, slightly above 0.5, indicating a modest but statistically significant bias.
+Unlike df_agg, which is aggregated by participant–coin pairs, the dataset df_agg_time details each individual flip (350,757 rows total). This format allows us to explore:
 
--   **Participant Variability**: A higher mean (0.510) and greater spread among participants highlight the importance of participant-specific effects. The outliers indicate certain participants might be flipping coins in a non-random manner.
+* Learning or Fatigue Effects: Does the probability of a coin landing on the same side change over the sequence of flips?
+* Lagged Outcomes: Variables lag_1, lag_2, lag_3 record how many flips ago were heads or tails, enabling us to check for short-term dependencies.
+* Timing of Flips by Participant: Some participants might show changes in technique over many flips.
 
--   **Minimal Coin Influence**: Coin-level probabilities are tightly clustered around 0.5, suggesting coin characteristics may not play a major role ompared to participant influences ---at least in this aggregated dataset.
+```{r}
+# Streak or “Hot-Hand” Analysis
 
--   **Starting Side**: Heads-up or tails-up leads to virtually the same probability (0.508), indicating little difference in bias by orientation.
+# 1) Ensure we have a logical variable for landing on the same side
+df_agg_time <- df_agg_time %>%
+  mutate(same_side = (toss_start == toss_end))
 
-These observations will guide the model-building phase. In particular, **participant effects** seem important, whereas coin effects appear weaker. Although starting side does not show a strong effect overall, we may still retain it in our models to capture any subtle differences.
+# 2) Define a function to compute streak lengths of `TRUE` in a logical vector
+compute_streaks <- function(x) {
+  streaks <- c()    # store the lengths of consecutive TRUE streaks
+  count <- 0        # current streak length
+  
+  for (val in x) {
+    if (val) {
+      # increment if the current flip is TRUE
+      count <- count + 1
+    } else {
+      # if we hit a FALSE, record the current streak (if any) and reset
+      if (count > 0) {
+        streaks <- c(streaks, count)
+      }
+      count <- 0
+    }
+  }
+  
+  # if the vector ends on a TRUE streak, record that as well
+  if (count > 0) {
+    streaks <- c(streaks, count)
+  }
+  
+  return(streaks)
+}
+
+# 3) Apply the function for each (person, sequence_id)
+streaks_df <- df_agg_time %>%
+  arrange(person, sequence_id, toss_number) %>%
+  group_by(person, sequence_id) %>%
+  summarise(
+    # compute vector of same_side
+    streaks_list = list(compute_streaks(same_side))
+  ) %>%
+  ungroup()
+
+# 4) 'streaks_list' is a list-column containing numeric vectors of streak lengths
+#    Flatten it out for plotting or summary
+library(tidyr)
+
+streaks_unnested <- streaks_df %>%
+  unnest(cols = streaks_list) %>%
+  rename(streak_length = streaks_list)
+
+# 5) Summarize or visualize
+summary(streaks_unnested$streak_length)
+
+# simple histogram of streak lengths
+library(ggplot2)
+
+ggplot(streaks_unnested, aes(x = streak_length)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "steelblue") +
+  labs(
+    title = "Distribution of Streak Lengths (Same Side)",
+    x = "Streak Length",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+
+# Example: simulate the same number of flips with p=0.508
+# and compare streak distributions
+n_flips <- nrow(df_agg_time) # total flips
+set.seed(123)
+sim_flips <- rbinom(n_flips, size = 1, prob = 0.508) # 1 = same_side
+sim_df <- data.frame(same_side = sim_flips == 1)
+
+# compute streaks in the simulated data (single sequence for simplicity)
+sim_streaks <- compute_streaks(sim_df$same_side)
+
+# compare histograms or do a more formal test (e.g., chi-square)
+
+
+
+```
+
+```{r}
+# Transition Probabilities (Markov-Type Check)
+
+# 1) We need lag_1 or define it on the fly
+# analogously can be done for lag2 and 3
+df_agg_time <- df_agg_time %>%
+  arrange(person, sequence_id, toss_number) %>%
+  group_by(person, sequence_id) %>%
+  mutate(lag_1 = lag(toss_end, 1)) %>%
+  ungroup()
+
+# 2) Compute transition probability: P(next flip = h | previous flip = h)
+transition_probs <- df_agg_time %>%
+  filter(!is.na(lag_1)) %>%
+  group_by(lag_1) %>%
+  summarise(
+    count_curr_head = sum(toss_end == "h"),
+    count_total     = n(),
+    prob_curr_head  = mean(toss_end == "h")
+  )
+
+print(transition_probs)
+
+library(dplyr)
+library(ggplot2)
+
+transition_plot_df <- df_agg_time %>%
+  filter(!is.na(lag_1)) %>%
+  mutate(
+    prev_flip = factor(lag_1, levels = c("h", "t")),
+    curr_flip = factor(toss_end, levels = c("h", "t"))
+  ) %>%
+  group_by(prev_flip, curr_flip) %>%
+  tally() %>%
+  group_by(prev_flip) %>%
+  mutate(prob = n / sum(n)) %>%
+  ungroup()
+
+ggplot(transition_plot_df, aes(x = prev_flip, y = prob, fill = curr_flip)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Transition Probabilities for (prev_flip -> curr_flip)",
+    x = "Previous Flip Outcome",
+    y = "Probability"
+  ) +
+  scale_fill_viridis_d(name = "Current Flip") +
+  theme_minimal()
+
+# Bars show the conditional probability of ending heads or tails given the previous outcome. If memoryless, bars for heads/tails should be roughly the same in each facet.
+
+```
+
+```{r}
+# Learning or Fatigue Curves
+df_sequence_summary <- df_agg_time %>%
+  arrange(person, sequence_id, toss_number) %>%
+  group_by(person, sequence_id) %>%
+  mutate(
+    # For instance, focusing on heads in toss_end
+    cumulative_heads = cumsum(toss_end == "h"),
+    prop_heads_so_far = cumulative_heads / toss_number
+  ) %>%
+  ungroup()
+
+ggplot(df_sequence_summary, aes(x = toss_number, y = prop_heads_so_far, group = sequence_id)) +
+  geom_line(alpha = 0.4) +
+  facet_wrap(~ person, scales = "free_y") +
+  labs(
+    title = "Learning or Fatigue Curves by Participant and Sequence",
+    x = "Toss Number",
+    y = "Proportion of Heads So Far"
+  ) +
+  theme_minimal()
+
+
+```
+
 
 #### **2. Analysis**
 
@@ -387,28 +549,24 @@ Building upon the insights from our EDA, we proceed to model the probability of 
 
 ##### 2.1 Simple Logistic Regression Model
 
-As a first step, we fit the simplest possible logistic model, treating **all flips** (aggregated in `df_agg_agg`) as independent Bernoulli trials with a single intercept term. Conceptually, this model estimates a single probability $p$ that a flip lands heads, irrespective of participant or coin. Though extremely simplistic, it provides a baseline for more complex models.
-
-
+As a first step, we fit the simplest possible logistic model, treating **all flips** (aggregated in `df_agg_agg`) as independent Bernoulli trials with a single intercept term. Conceptually, this model estimates a single probability $p$ that a flip lands heads, irrespective of participant or coin.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Fit a simple logistic regression model
 model_simple <- glm(cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1, family = binomial, data = df_agg)
 summary(model_simple)
+check_model(model_simple)
 ```
 
 **Model Output**
 
-The estimated coefficient and associated statistics are: $ \hat{\beta}_0 = 0.0314, \quad \text{SE}(\hat{\beta}_0) = 0.0048, \quad z = \frac{\hat{\beta}_0}{\text{SE}(\hat{\beta}_0)} = 6.558, \quad p < 0.001 $
+Fitting the model yields an estimated log-odds of $\hat{\beta}_0 \approx 0.032$, corresponding to a probability
+\[
+\hat{p} = \frac{\exp(\hat{\beta}_0)}{1 + \exp(\hat{\beta}_0)} \approx 0.508.
+\]
+The intercept is statistically significant ($ p < 0.001 $) and the confidence interval for $\hat{p}$ excludes 0.50, aligning with the exploratory analysis and confirming a slight but significant bias in favor of landing on the same side.
 
-The intercept is statistically significant ($ p < 0.001 $), indicating that the probability deviates from 0.5.
-
-**Probability Estimate**
-
-The probability of a coin landing heads up after starting heads up is obtained by applying the inverse logit function: $\hat{p} = \frac{\exp(\hat{\beta}_0)}{1 + \exp(\hat{\beta}_0)} = \frac{\exp(0.0314)}{1 + \exp(0.0314)} \approx 0.508 $
-
-This result suggests a slight bias toward coins landing on the same side they started.
 
 **Model Fit**
 
@@ -418,12 +576,9 @@ This result suggests a slight bias toward coins landing on the same side they st
 
 The residual deviance equals the null deviance since no predictors were included, and the AIC provides a benchmark for model comparisons.
 
-**Interpretation**
+While this model captures the overall probability, it assumes that all flips are independent and identically distributed Bernoulli trials, ignoring potential variability due to participant effects, coin characteristics, or starting orientation. Further modeling will incorporate these factors to capture hierarchical structures and dependencies.
 
-The estimated probability, $\hat{p} \approx 0.508 $, suggests a slight bias toward coins landing on the same side they started. This deviation is statistically significant, as indicated by the z-statistic and p-value. While this model captures the overall probability, it assumes that all flips are independent and identically distributed Bernoulli trials, ignoring potential variability due to participant effects, coin characteristics, or starting orientation. Further modeling will incorporate these factors to capture hierarchical structures and dependencies.
-
-
-## **3.2 Incorporating Hierarchical Structures**
+## **2.2 Incorporating Hierarchical Structures**
 
 The simple logistic regression model provided a useful baseline, estimating an overall bias ($\hat{p} \approx 0.508$) toward coins landing on the same side. However, it assumes all flips are independent and identically distributed, ignoring:
 - Participant-specific flipping styles.
