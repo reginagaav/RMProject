@@ -415,51 +415,80 @@ compute_streaks <- function(x) {
   return(streaks)
 }
 
-# 3) Apply the function for each (person, sequence_id)
+# 3) Compute streak lengths for the observed data
 streaks_df <- df_agg_time %>%
   arrange(person, sequence_id, toss_number) %>%
   group_by(person, sequence_id) %>%
   summarise(
-    # compute vector of same_side
     streaks_list = list(compute_streaks(same_side))
   ) %>%
   ungroup()
 
-# 4) 'streaks_list' is a list-column containing numeric vectors of streak lengths
-#    Flatten it out for plotting or summary
-library(tidyr)
-
+# Flatten the streaks into a single column for analysis
 streaks_unnested <- streaks_df %>%
   unnest(cols = streaks_list) %>%
   rename(streak_length = streaks_list)
 
-# 5) Summarize or visualize
+# Summarize the streak lengths
 summary(streaks_unnested$streak_length)
 
-# simple histogram of streak lengths
+# 4) Visualize streak length distribution for observed data
 library(ggplot2)
 
 ggplot(streaks_unnested, aes(x = streak_length)) +
   geom_histogram(binwidth = 1, color = "black", fill = "steelblue") +
   labs(
-    title = "Distribution of Streak Lengths (Same Side)",
+    title = "Distribution of Streak Lengths (Observed Data)",
     x = "Streak Length",
     y = "Count"
   ) +
   theme_minimal()
 
 
-# Example: simulate the same number of flips with p=0.508
-# and compare streak distributions
+# Simulated Data for Comparison -----------------------------------------------
+
+# 5) Simulate streaks assuming p = 0.508
 n_flips <- nrow(df_agg_time) # total flips
 set.seed(123)
 sim_flips <- rbinom(n_flips, size = 1, prob = 0.508) # 1 = same_side
 sim_df <- data.frame(same_side = sim_flips == 1)
 
-# compute streaks in the simulated data (single sequence for simplicity)
+# Compute streak lengths for simulated data
 sim_streaks <- compute_streaks(sim_df$same_side)
 
-# compare histograms or do a more formal test (e.g., chi-square)
+# Create dataframe for simulated streaks
+sim_streaks_df <- data.frame(streak_length = sim_streaks)
+
+# 6) Visualize simulated streak lengths
+ggplot(sim_streaks_df, aes(x = streak_length)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "lightgreen") +
+  labs(
+    title = "Distribution of Streak Lengths (Simulated Data, p = 0.508)",
+    x = "Streak Length",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+
+# Formal Statistical Comparison -----------------------------------------------
+
+# 7) Chi-Square Test: Compare observed vs. simulated streak distributions
+
+# Bin the data into categories to avoid sparse counts
+obs_freq <- table(cut(streaks_unnested$streak_length, breaks = c(0, 1, 2, 3, 4, 5, 10, Inf)))
+sim_freq <- table(cut(sim_streaks_df$streak_length, breaks = c(0, 1, 2, 3, 4, 5, 10, Inf)))
+
+# Display observed and simulated frequencies
+obs_freq
+sim_freq
+
+# Chi-square test to compare observed and simulated distributions
+chisq_test <- chisq.test(obs_freq, p = prop.table(sim_freq))
+
+# Output results
+print(chisq_test)
+
+
 
 
 
