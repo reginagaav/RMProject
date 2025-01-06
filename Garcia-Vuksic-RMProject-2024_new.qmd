@@ -23,6 +23,7 @@ library(ggplot2)
 library(dplyr)
 library(performance)
 library(patchwork)
+library(lme4)
 
 # Read the aggregated dataset
 df_agg <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin data/analyses/data-agg.csv") %>%
@@ -273,6 +274,8 @@ fig_merged
 
 ```
 
+*Figure 4: Merged: Histogram of the probability of landing on the same side by participant and by coin.*
+
 Outliers were identified for coins with probabilities exceeding two standard deviations from the mean.
 
 ```{r,message=FALSE,warning=FALSE}
@@ -373,7 +376,7 @@ fig4 <- ggplot(df_agg_long, aes(x = starting_side, y = probability, fill = start
 ggsave("fig4.png", plot = fig4, width = 8, height = 6, dpi = 300)
 ```
 
-*Figure 4: Violin plot of the probability of landing on the same side by starting side.*
+*Figure 5: Violin plot of the probability of landing on the same side by starting side.*
 
 Both distributions are centered around 0.508, with comparable spread, suggesting **no notable systematic difference** between starting heads-up or tails-up. Some outliers in each group do appear, which may reflect unique participant behaviors or chance fluctuations.
 
@@ -388,207 +391,7 @@ starting_side_outliers <- df_agg_long %>%
 print(starting_side_outliers)
 ```
 
-##### **1.2. EDA for Time-Resolved Data (df_agg_time)**
-
-Unlike df_agg, which is aggregated by participant–coin pairs, the dataset df_agg_time details each individual flip (350,757 rows total). This format allows us to explore:
-
-* Learning or Fatigue Effects: Does the probability of a coin landing on the same side change over the sequence of flips?
-* Lagged Outcomes: Variables lag_1, lag_2, lag_3 record how many flips ago were heads or tails, enabling us to check for short-term dependencies.
-* Timing of Flips by Participant: Some participants might show changes in technique over many flips.
-
-```{r}
-# Streak or “Hot-Hand” Analysis
-
-# 1) Ensure we have a logical variable for landing on the same side
-df_agg_time <- df_agg_time %>%
-  mutate(same_side = (toss_start == toss_end))
-
-# 2) Define a function to compute streak lengths of `TRUE` in a logical vector
-compute_streaks <- function(x) {
-  streaks <- c()    # store the lengths of consecutive TRUE streaks
-  count <- 0        # current streak length
-  
-  for (val in x) {
-    if (val) {
-      # increment if the current flip is TRUE
-      count <- count + 1
-    } else {
-      # if we hit a FALSE, record the current streak (if any) and reset
-      if (count > 0) {
-        streaks <- c(streaks, count)
-      }
-      count <- 0
-    }
-  }
-  
-  # if the vector ends on a TRUE streak, record that as well
-  if (count > 0) {
-    streaks <- c(streaks, count)
-  }
-  
-  return(streaks)
-}
-
-# 3) Compute streak lengths for the observed data
-streaks_df <- df_agg_time %>%
-  arrange(person, sequence_id, toss_number) %>%
-  group_by(person, sequence_id) %>%
-  summarise(
-    streaks_list = list(compute_streaks(same_side))
-  ) %>%
-  ungroup()
-
-# Flatten the streaks into a single column for analysis
-streaks_unnested <- streaks_df %>%
-  unnest(cols = streaks_list) %>%
-  rename(streak_length = streaks_list)
-
-# Summarize the streak lengths
-summary(streaks_unnested$streak_length)
-
-# 4) Visualize streak length distribution for observed data
-library(ggplot2)
-
-ggplot(streaks_unnested, aes(x = streak_length)) +
-  geom_histogram(binwidth = 1, color = "black", fill = "steelblue") +
-  labs(
-    title = "Distribution of Streak Lengths (Observed Data)",
-    x = "Streak Length",
-    y = "Count"
-  ) +
-  theme_minimal()
-
-
-# Simulated Data for Comparison -----------------------------------------------
-
-# 5) Simulate streaks assuming p = 0.508
-n_flips <- nrow(df_agg_time) # total flips
-set.seed(123)
-sim_flips <- rbinom(n_flips, size = 1, prob = 0.508) # 1 = same_side
-sim_df <- data.frame(same_side = sim_flips == 1)
-
-# Compute streak lengths for simulated data
-sim_streaks <- compute_streaks(sim_df$same_side)
-
-# Create dataframe for simulated streaks
-sim_streaks_df <- data.frame(streak_length = sim_streaks)
-
-# 6) Visualize simulated streak lengths
-ggplot(sim_streaks_df, aes(x = streak_length)) +
-  geom_histogram(binwidth = 1, color = "black", fill = "lightgreen") +
-  labs(
-    title = "Distribution of Streak Lengths (Simulated Data, p = 0.508)",
-    x = "Streak Length",
-    y = "Count"
-  ) +
-  theme_minimal()
-
-
-# Formal Statistical Comparison -----------------------------------------------
-
-# 7) Chi-Square Test: Compare observed vs. simulated streak distributions
-
-# Bin the data into categories to avoid sparse counts
-obs_freq <- table(cut(streaks_unnested$streak_length, breaks = c(0, 1, 2, 3, 4, 5, 10, Inf)))
-sim_freq <- table(cut(sim_streaks_df$streak_length, breaks = c(0, 1, 2, 3, 4, 5, 10, Inf)))
-
-# Display observed and simulated frequencies
-obs_freq
-sim_freq
-
-# Chi-square test to compare observed and simulated distributions
-chisq_test <- chisq.test(obs_freq, p = prop.table(sim_freq))
-
-# Output results
-print(chisq_test)
-
-
-
-
-
-```
-
-```{r}
-# Transition Probabilities (Markov-Type Check)
-
-# 1) We need lag_1 or define it on the fly
-# analogously can be done for lag2 and 3
-df_agg_time <- df_agg_time %>%
-  arrange(person, sequence_id, toss_number) %>%
-  group_by(person, sequence_id) %>%
-  mutate(lag_1 = lag(toss_end, 1)) %>%
-  ungroup()
-
-# 2) Compute transition probability: P(next flip = h | previous flip = h)
-transition_probs <- df_agg_time %>%
-  filter(!is.na(lag_1)) %>%
-  group_by(lag_1) %>%
-  summarise(
-    count_curr_head = sum(toss_end == "h"),
-    count_total     = n(),
-    prob_curr_head  = mean(toss_end == "h")
-  )
-
-print(transition_probs)
-
-library(dplyr)
-library(ggplot2)
-
-transition_plot_df <- df_agg_time %>%
-  filter(!is.na(lag_1)) %>%
-  mutate(
-    prev_flip = factor(lag_1, levels = c("h", "t")),
-    curr_flip = factor(toss_end, levels = c("h", "t"))
-  ) %>%
-  group_by(prev_flip, curr_flip) %>%
-  tally() %>%
-  group_by(prev_flip) %>%
-  mutate(prob = n / sum(n)) %>%
-  ungroup()
-
-ggplot(transition_plot_df, aes(x = prev_flip, y = prob, fill = curr_flip)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  labs(
-    title = "Transition Probabilities for (prev_flip -> curr_flip)",
-    x = "Previous Flip Outcome",
-    y = "Probability"
-  ) +
-  scale_fill_viridis_d(name = "Current Flip") +
-  theme_minimal()
-
-# Bars show the conditional probability of ending heads or tails given the previous outcome. If memoryless, bars for heads/tails should be roughly the same in each facet.
-
-```
-
-```{r}
-# Learning or Fatigue Curves
-df_sequence_summary <- df_agg_time %>%
-  arrange(person, sequence_id, toss_number) %>%
-  group_by(person, sequence_id) %>%
-  mutate(
-    # For instance, focusing on heads in toss_end
-    cumulative_heads = cumsum(toss_end == "h"),
-    prop_heads_so_far = cumulative_heads / toss_number
-  ) %>%
-  ungroup()
-
-ggplot(df_sequence_summary, aes(x = toss_number, y = prop_heads_so_far, group = sequence_id)) +
-  geom_line(alpha = 0.4) +
-  facet_wrap(~ person, scales = "free_y") +
-  labs(
-    title = "Learning or Fatigue Curves by Participant and Sequence",
-    x = "Toss Number",
-    y = "Proportion of Heads So Far"
-  ) +
-  theme_minimal()
-
-
-```
-
-
 #### **2. Analysis**
-
-Building upon the insights from our EDA, we proceed to model the probability of a coin landing on the same side using generalized linear models (GLMs). Given the binary nature of the outcome (landing on the same side or not), logistic regression is an appropriate choice. We begin with a simple model and later incorporate hierarchical structures to account for variability.
 
 ##### 2.1 Simple Logistic Regression Model
 
@@ -597,41 +400,12 @@ As a first step, we fit the simplest possible logistic model, treating **all fli
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Fit a simple logistic regression model
-model_simple <- glm(cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1, family = binomial, data = df_agg)
-summary(model_simple)
-check_model(model_simple)
+model_1 <- glm(cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1, family = binomial, data = df_agg)
+summary(model_1)
+check_model(model_1)
 ```
 
-**Model Output**
-
-Fitting the model yields an estimated log-odds of $\hat{\beta}_0 \approx 0.032$, corresponding to a probability
-\[
-\hat{p} = \frac{\exp(\hat{\beta}_0)}{1 + \exp(\hat{\beta}_0)} \approx 0.508.
-\]
-The intercept is statistically significant ($ p < 0.001 $) and the confidence interval for $\hat{p}$ excludes 0.50, aligning with the exploratory analysis and confirming a slight but significant bias in favor of landing on the same side.
-
-
-**Model Fit**
-
--   Null Deviance: 284.28
--   Residual Deviance: 284.28
--   AIC: 1739.6
-
-The residual deviance equals the null deviance since no predictors were included, and the AIC provides a benchmark for model comparisons.
-
-While this model captures the overall probability, it assumes that all flips are independent and identically distributed Bernoulli trials, ignoring potential variability due to participant effects, coin characteristics, or starting orientation. Further modeling will incorporate these factors to capture hierarchical structures and dependencies.
-
-## **2.2 Incorporating Hierarchical Structures**
-
-The simple logistic regression model provided a useful baseline, estimating an overall bias ($\hat{p} \approx 0.508$) toward coins landing on the same side. However, it assumes all flips are independent and identically distributed, ignoring:
-- Participant-specific flipping styles.
-- Coin-specific physical characteristics.
-
-To address these issues, we fit hierarchical models using **generalized linear mixed models (GLMMs)**. These models account for variability at different levels, starting with participants and then considering coins nested within participants.
-
-### **Model 1: Random Intercepts for Participants Only**
-
-#### **Model Specification**
+##### 2.2 Random Intercepts for Participants Only
 
 We first fit a GLMM that includes a random intercept for participants. This model captures variability in flipping outcomes across participants without considering coin-specific effects. The model is expressed as:
 $$
@@ -644,58 +418,28 @@ where:
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
-
-# Load necessary library
-library(lme4)
-
 # Fit a mixed-effects logistic regression model with random intercepts for participants
-glmm_participants <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
+model_2 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
                              (1 | person),
                            family = binomial, data = df_agg)
-
-# Summarize the model
-summary(glmm_participants)
+summary(model_2)
+check_model(model_2)
 ```
-
-### **Model Results**
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 
 # Extract model summary statistics
 library(broom.mixed)
-fixed_effects_participants <- tidy(glmm_participants, effects = "fixed")
-random_effects_participants <- tidy(glmm_participants, effects = "ran_pars")
+fixed_effects_participants <- tidy(model_2, effects = "fixed")
+random_effects_participants <- tidy(model_2, effects = "ran_pars")
 
 # Display fixed and random effects
 print(fixed_effects_participants)
 print(random_effects_participants)
 ```
-### **Results and Interpretation**
 
-#### **Fixed Effect (\(\beta_0\)):**
-The intercept (\(\beta_0 = 0.039884\)) represents the average log-odds of landing on the same side across all participants. Transforming this into a probability:
-$$
-\hat{p} = \frac{\exp(0.039884)}{1 + \exp(0.039884)} \approx 0.51
-$$
-This suggests a small but statistically significant bias (\(p < 0.001\)) toward coins landing on the same side (\(51\%\)).
-
-#### **Random Effect Variance (\(\sigma_{\gamma}^2\)):**
-The participant-specific random intercepts have a variance of \(\sigma_{\gamma}^2 = 0.003917\), corresponding to a standard deviation of \(\sigma_\gamma = 0.06258\). This indicates that while flipping styles vary between participants, the variability is relatively small compared to the overall scale of the fixed effect.
-
-#### **Model Fit:**
-The AIC of 1967.4 and log-likelihood of -981.7 provide benchmarks for comparison with more complex models.
-
-#### **Limitations and Motivation for Next Model**
-While this model captures participant-level variability, it assumes that all coins behave identically, which is likely unrealistic given differences in physical properties (e.g., weight, size, and material). Moreover, each coin is specific to a participant, introducing a nested structure in the data. Ignoring this structure may lead to an incomplete understanding of variability, as both participant-level effects (\(\sigma_{\gamma}^2\)) and coin-level effects (\(\sigma_{\delta(j)}^2\)) could contribute to the outcomes.
-
-To better capture this nested structure and disentangle participant and coin-specific variability, we extend the model to include random intercepts for both participants and coins.
-
----
-
-### **Model 2: Random Intercepts for Participants and Coins Nested Within Participants**
-
-#### **Model Specification**
+##### 2.3 Random Intercepts for Participants and Coins Nested Within Participants
 This extended model accounts for both participant-specific and coin-specific variability by including coins as random effects nested within participants. The model is expressed as:
 $$
 \log \left( \frac{p_{ijk}}{1 - p_{ijk}} \right) = \beta_0 + \gamma_i + \delta_{j(i)}
@@ -705,58 +449,28 @@ where:
 - \(\gamma_i\): Random effect for participant \(i\), capturing variability in flipping styles,
 - \(\delta_{j(i)}\): Random effect for coin \(j\), nested within participant \(i\), capturing variability between coins flipped by the same participant.
 
-This extension allows us to quantify the contribution of coin-specific variability relative to participant-specific variability, addressing the limitations of the first model and providing a more accurate representation of the data structure.
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
-
 # Fit a mixed-effects logistic regression model with nested random intercepts
-glmm_nested <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
+model_3 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
                       (1 | person/coin),
                     family = binomial, data = df_agg)
-
-# Summarize the model
-summary(glmm_nested)
+summary(model_3)
+check_model(model_3)
 ```
 
-### **Model Results**
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 
 # Extract model summary statistics
-fixed_effects_nested <- tidy(glmm_nested, effects = "fixed")
-random_effects_nested <- tidy(glmm_nested, effects = "ran_pars")
+fixed_effects_nested <- tidy(model_3, effects = "fixed")
+random_effects_nested <- tidy(model_3, effects = "ran_pars")
 
 # Display fixed and random effects
 print(fixed_effects_nested)
 print(random_effects_nested)
 ```
-### **Results and Interpretation**
-//maybe this is a bit repetitive//
-
-The results are as follows:
-
-- **Fixed Effect (\(\beta_0\)):**
-    - The fixed intercept (\(\beta_0 = 0.038513\)) represents the average **log-odds** of landing on the same side across all participants and coins. Converting this to a probability:
-      
-      $\hat{p} = \frac{\exp(0.038513)}{1 + \exp(0.038513)} \approx 0.51 $
-      This suggests a slight but statistically significant bias (\(p < 0.001\)) toward coins landing on the same side (\(51\%\)).
-
-- **Random Effect Variances:**
-    - **Participant Variability (\(\sigma_{\gamma}^2\)):**
-        - The participant-specific random intercepts have a variance of \(\sigma_{\gamma}^2 = 0.003631\), corresponding to a standard deviation of \(\sigma_\gamma = 0.06026\). This indicates that differences in flipping styles between participants are the primary source of variability.
-    - **Coin Variability Nested Within Participants (\(\sigma_{\delta(j)}^2\)):**
-        - The variance for coins nested within participants is \(\sigma_{\delta(j)}^2 = 0.000844\), with a standard deviation of \(\sigma_{\delta(j)} = 0.02905\). This reflects some additional variability due to individual coins, though it is smaller compared to participant-level variability.
-
-- **Model Fit:**
-    - The AIC of 1960.2 and log-likelihood of -977.1 indicate a slight improvement in model fit compared to Model 1 (AIC = 1967.4, log-likelihood = -981.7). This suggests that including coin-specific variability improves the model's explanatory power, though the improvement is modest.
-
-#### **Key Insights:**
-- **Dominance of Participant Effects:** The variability attributable to participants (\(\sigma_{\gamma}^2\)) is substantially larger than the variability attributable to coins (\(\sigma_{\delta(j)}^2\)), suggesting that flipping outcomes are primarily influenced by participant-specific behavior rather than coin-specific characteristics.
-- **Hierarchical Structure:** By accounting for coins nested within participants, this model provides a more accurate representation of the data's structure, successfully partitioning variability at both levels.
-
-This model enhances the understanding of flipping outcomes by capturing both participant and coin-level effects, confirming that participant-level variability is the dominant factor.
 
 ---
 ### **Comparison of Models**
