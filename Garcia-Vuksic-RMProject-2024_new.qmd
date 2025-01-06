@@ -1,13 +1,14 @@
 ---
 title: "Regression Methods Project"
 format: html
-header-includes:
-  - \usepackage{xcolor}  
-  - \usepackage{amsmath} 
-  - \usepackage{amssymb} 
-  - \usepackage{bm}      
-pdf_agg-engine: xelatex      
+header-includes: 
+  - \usepackage{xcolor}
+  - \usepackage{amsmath}
+  - \usepackage{amssymb}
+  - \usepackage{bm}
+df_agg-engine: xelatex
 ---
+
 
 #### **1. Introduction and Exploratory Data Analysis**
 
@@ -21,9 +22,13 @@ library(glue)
 library(viridis)
 library(ggplot2)
 library(dplyr)
-library(performance)
-library(patchwork)
-library(lme4)
+library(performance)     # For check_model, etc.
+library(patchwork)       # For side-by-side plots
+library(lme4)            # For GLMM
+library(broom)
+library(broom.mixed)     # Tidy for mixed models
+library(car)             # For VIF
+library(lattice)         # For random-effects dotplot
 
 # Read the aggregated dataset
 df_agg <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin data/analyses/data-agg.csv") %>%
@@ -41,19 +46,20 @@ df_agg <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin dat
 # Read the time-resolved dataset
 df_agg_time <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin data/analyses/df-time.csv") %>%
   mutate(
-    person     = factor(person),
-    coin       = factor(coin),
+    person = factor(person),
+    coin = factor(coin),
     toss_start = factor(toss_start),
-    toss_end   = factor(toss_end)
+    toss_end = factor(toss_end)
   ) %>%
   arrange(person, sequence_id, toss_number) %>%
   group_by(person, sequence_id) %>%
   mutate(
-    lag_1 = lag(toss_end, 1),
-    lag_2 = lag(toss_end, 2),
-    lag_3 = lag(toss_end, 3)
+    lag_1 = lag(toss_end, 1),  # Outcome of the previous flip
+    lag_2 = lag(toss_end, 2),  # Outcome of two flips ago
+    lag_3 = lag(toss_end, 3)   # Outcome of three flips ago
   ) %>%
-  ungroup()
+  ungroup() %>%
+  filter(!is.na(lag_1) & !is.na(lag_2) & !is.na(lag_3))  # Remove NA rows for lags
 
 #df_agg_time <- read_csv("C:/Users/mimav/OneDrive/Desktop/regression/df_agg-time.csv") %>%
 #  mutate(
@@ -71,16 +77,17 @@ df_agg_time <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coi
 #  ) %>%
 #  ungroup()
 
-# Check the first few rows
+# Check resulting data frame
 head(df_agg_time)
+
+dim(df_agg_time)
+
 
 ```
 
-##### **1.1. EDA for Aggregated Data (df_agg)**
+##### **1.1. EDA**
 
 **Overall Probability of Landing on the Same Side**
-
-To assess the overall bias, we first compute how often the coin ends on the same side it started.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -114,10 +121,9 @@ print(summary_stats)
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
+# t test against p=0.5 
 t.test(df_agg$prob_same_side, mu = 0.5, alternative = "two.sided")
 ```
-
-From these results, we find a **mean probability** of about 0.508, slightly exceeding 0.5. A one-sample t-test against 0.5 indicates a statistically significant difference ($p < 0.05$). We visualize the distribution of these probabilities in Figure 1.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -135,18 +141,7 @@ fig1 <- ggplot(df_agg, aes(x = prob_same_side)) +
 ggsave("fig1.png", plot = fig1, width = 8, height = 6, dpi = 300)
 ```
 
-*Figure 1: Histogram of the probability of landing on the same side across all coins and participants.*
-
-
 **Participant-Level Analysis**
-
-Next, we examine how this probability varies by participant. 
-
-We sum heads-up and tails-up flips by participant to obtain
-
-$p_i = \frac{(\text{heads_heads})_i + (\text{tails_tails})_i}{(\text{total_flips})_i}$
-
-where $(\text{heads_heads})_i$ is the total number of heads outcomes from heads-up starts for participant $i$, etc.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -175,8 +170,6 @@ print(participant_summary)
 
 ```
 
-The **mean participant-level probability** is around 0.510, slightly higher than the overall mean. This is illustrated in Figure 2.
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Histogram of probabilities of landing on the same side by participant
@@ -192,10 +185,6 @@ fig2 <- ggplot(participant_probs, aes(x = prob_same_side)) +
 ggsave("fig2.png", plot = fig2, width = 8, height = 6, dpi = 300)
 ```
 
-*Figure 2: Histogram of Probability of Landing on the Same Side by Participant*
-
-We identify outliers by checking which participants' probabilities lie beyond two standard deviations from the mean.
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Identify participants with extreme probabilities
@@ -208,12 +197,6 @@ print(participant_outliers)
 ```
 
 **Coin-Level Analysis**
-
-We then group flips by each *coin* to see whether some coins inherently land on the same side more frequently. Analogously, we compute
-
-$q_j = \frac{(\text{heads_heads})_j + (\text{tails_tails})_j}{(\text{total_flips})_j}$
-
-where $(\text{heads_heads})_j$ denotes the total number of heads outcomes from heads-up starts for coin \$j\$, etc.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
@@ -242,8 +225,6 @@ print(coin_summary)
 
 ```
 
-The **mean coin-level probability** is about 0.504, with smaller overall variability compared to participants, as shown in Figure 3.
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Histogram of probabilities by coin
@@ -259,11 +240,9 @@ fig3 <- ggplot(coin_probs, aes(x = prob_same_side)) +
 ggsave("fig3.png", plot = fig3, width = 8, height = 6, dpi = 300)
 ```
 
-*Figure 3: Histogram of the probability of landing on the same side by coin.*
-
 ```{r}
 #| echo: false
-# Combine fig_participants (left) and fig_coins (right) side by side
+# Merge participant and coin histograms side by side
 fig_merged <- fig2 + fig3 + 
   plot_layout(ncol = 2) & 
   theme(plot.title = element_text(size = 12))
@@ -274,10 +253,6 @@ fig_merged
 
 ```
 
-*Figure 4: Merged: Histogram of the probability of landing on the same side by participant and by coin.*
-
-Outliers were identified for coins with probabilities exceeding two standard deviations from the mean.
-
 ```{r,message=FALSE,warning=FALSE}
 #| echo: false
 # Identify coin outliers
@@ -287,8 +262,6 @@ coin_outliers <- coin_probs %>%
 
 print(coin_outliers)
 ```
-
-To further investigate, we analyzed person/coin combinations to explore whether specific participant-coin interactions exhibit unusual outcomes.
 
 ```{r,message=FALSE,warning=FALSE}
 # Calculate probabilities for person/coin combinations
@@ -306,12 +279,6 @@ print(person_coin_outliers)
 
 **Effect of Starting Side**
 
-Finally, we explore whether starting the coin heads-up vs. tails-up alters the likelihood of ending on the same side. We compare:
-
--   $p_{11}=P(Heads→Heads)$
-
--   $p_{00}=P(Tails→Tails)$
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Compare probabilities based on starting side
@@ -326,9 +293,6 @@ starting_side_probs <- df_agg %>%
 print(starting_side_probs)
 
 ```
-
-The results indicate **both** heads-up and tails-up flips have a mean probability of about 0.508 of landing on the same side. A t-test reveals no significant difference between the two groups, implying that "heads-up" vs. "tails-up" starts do not systematically alter the bias once participant and coin factors are averaged out.
-
 
 ```{r,message=FALSE, warning=FALSE}
 #| echo: false
@@ -355,8 +319,6 @@ df_agg_long %>%
 t.test(probability ~ starting_side, data = df_agg_long)
 ```
 
-A violin plot (Figure 4) shows the distribution of these probabilities:
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Violin plot of probabilities by starting side
@@ -376,10 +338,6 @@ fig4 <- ggplot(df_agg_long, aes(x = starting_side, y = probability, fill = start
 ggsave("fig4.png", plot = fig4, width = 8, height = 6, dpi = 300)
 ```
 
-*Figure 5: Violin plot of the probability of landing on the same side by starting side.*
-
-Both distributions are centered around 0.508, with comparable spread, suggesting **no notable systematic difference** between starting heads-up or tails-up. Some outliers in each group do appear, which may reflect unique participant behaviors or chance fluctuations.
-
 ```{r,message=FALSE,warning=FALSE}
 #| echo: false
 # Identify outliers by starting side
@@ -395,26 +353,24 @@ print(starting_side_outliers)
 
 ##### 2.1 Simple Logistic Regression Model
 
-As a first step, we fit the simplest possible logistic model, treating **all flips** (aggregated in `df_agg_agg`) as independent Bernoulli trials with a single intercept term. Conceptually, this model estimates a single probability $p$ that a flip lands heads, irrespective of participant or coin.
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
-# Fit a simple logistic regression model
-model_1 <- glm(cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1, family = binomial, data = df_agg)
+# Fit the simplest possible logistic model
+model_1 <- glm(
+  cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1,
+  family = binomial,
+  data = df_agg
+)
+
+# Print summary
 summary(model_1)
+
+# Model diagnostics 
 check_model(model_1)
+
 ```
 
 ##### 2.2 Random Intercepts for Participants Only
-
-We first fit a GLMM that includes a random intercept for participants. This model captures variability in flipping outcomes across participants without considering coin-specific effects. The model is expressed as:
-$$
-\log \left( \frac{p_{ik}}{1 - p_{ik}} \right) = \beta_0 + \gamma_i
-$$
-where:
-- $p_{ik}$: Probability of landing on the same side for the $k$-th flip by participant $i$.
-- $\beta_0$: Fixed effect intercept, representing the overall log-odds across all participants.
-- $\gamma_i$: Random effect for participant $i$, capturing variability in flipping styles.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
@@ -422,32 +378,27 @@ where:
 model_2 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
                              (1 | person),
                            family = binomial, data = df_agg)
+
+# Print summary
 summary(model_2)
+
+# Model diagnostics
 check_model(model_2)
 ```
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 
-# Extract model summary statistics
-library(broom.mixed)
+# extract fixed and random effects
 fixed_effects_participants <- tidy(model_2, effects = "fixed")
 random_effects_participants <- tidy(model_2, effects = "ran_pars")
 
-# Display fixed and random effects
-print(fixed_effects_participants)
-print(random_effects_participants)
+fixed_effects_participants
+random_effects_participants
+
 ```
 
 ##### 2.3 Random Intercepts for Participants and Coins Nested Within Participants
-This extended model accounts for both participant-specific and coin-specific variability by including coins as random effects nested within participants. The model is expressed as:
-$$
-\log \left( \frac{p_{ijk}}{1 - p_{ijk}} \right) = \beta_0 + \gamma_i + \delta_{j(i)}
-$$
-where:
-- \(\beta_0\): Fixed effect intercept, representing the overall log-odds of landing on the same side,
-- \(\gamma_i\): Random effect for participant \(i\), capturing variability in flipping styles,
-- \(\delta_{j(i)}\): Random effect for coin \(j\), nested within participant \(i\), capturing variability between coins flipped by the same participant.
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
@@ -455,7 +406,10 @@ where:
 model_3 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
                       (1 | person/coin),
                     family = binomial, data = df_agg)
+# Print Summary
 summary(model_3)
+
+# Model diagnostics
 check_model(model_3)
 ```
 
@@ -463,33 +417,253 @@ check_model(model_3)
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 
-# Extract model summary statistics
+# extract fixed and random effects
 fixed_effects_nested <- tidy(model_3, effects = "fixed")
 random_effects_nested <- tidy(model_3, effects = "ran_pars")
 
-# Display fixed and random effects
-print(fixed_effects_nested)
-print(random_effects_nested)
+fixed_effects_nested
+random_effects_nested
+
+```
+#### Comparison of Models 1,2 and 3
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+# Summaries of AIC, BIC, logLik, deviance
+model_comp <- rbind(
+  data.frame(
+    Model       = "Model 1: Simple Logistic",
+    AIC         = AIC(model_1),
+    BIC         = BIC(model_1),
+    logLik      = as.numeric(logLik(model_1)),
+    Deviance    = deviance(model_1)
+  ),
+  data.frame(
+    Model       = "Model 2: Participants Only",
+    AIC         = AIC(model_2),
+    BIC         = BIC(model_2),
+    logLik      = as.numeric(logLik(model_2)),
+    Deviance    = deviance(model_2)
+  ),
+  data.frame(
+    Model       = "Model 3: Participants + Nested Coins",
+    AIC         = AIC(model_3),
+    BIC         = BIC(model_3),
+    logLik      = as.numeric(logLik(model_3)),
+    Deviance    = deviance(model_3)
+  )
+)
+
+model_comp
+
 ```
 
----
-### **Comparison of Models**
-
-To evaluate the importance of including hierarchical structures, we compare all models: the simple logistic regression model, the participants-only random effects model, and the participants-and-nested-coins random effects model. We use likelihood ratio tests, AIC, and BIC values to assess the models.
+We use likelihood ratio tests (LRTs) to formally compare the models:
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 
-# Compare all three models using AIC, BIC, and log-likelihood
-comparison <- data.frame(
-  Model = c("Simple Logistic Regression", "Participants Only", "Participants and Nested Coins"),
-  LogLikelihood = c(logLik(model_simple), logLik(glmm_participants), logLik(glmm_nested)),
-  AIC = c(AIC(model_simple), AIC(glmm_participants), AIC(glmm_nested)),
-  BIC = c(BIC(model_simple), BIC(glmm_participants), BIC(glmm_nested))
+anova(model_1, model_2, model_3, test = "Chisq")
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+# Comparing fixed effects
+
+# For model_1 (GLM):
+fixef_1 <- tidy(model_1) %>%
+  select(term, estimate, std.error, statistic, p.value) %>%
+  mutate(Model = "Model 1")
+
+# For model_2 (mixed-effects):
+fixef_2 <- tidy(model_2, effects = "fixed") %>%
+  select(term, estimate, std.error, statistic, p.value) %>%
+  mutate(Model = "Model 2")
+
+# For model_3 (mixed-effects):
+fixef_3 <- tidy(model_3, effects = "fixed") %>%
+  select(term, estimate, std.error, statistic, p.value) %>%
+  mutate(Model = "Model 3")
+
+# Now all three data frames have the same columns and can be row-bound
+fixed_all <- rbind(fixef_1, fixef_2, fixef_3)
+fixed_all
+
+
+```
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+
+#Comparing random effects
+ranef_2 <- tidy(model_2, effects = "ran_pars") %>% mutate(Model = "Model 2")
+ranef_3 <- tidy(model_3, effects = "ran_pars") %>% mutate(Model = "Model 3")
+
+rbind(ranef_2, ranef_3)
+
+```
+##### 2.4 Analysis of Time Resolved Data
+
+###### 2.4.1 Logistic Models with Lagged Covariates
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+lag_models <- list(
+  lag1 = glm(toss_end ~ lag_1, family=binomial, data=df_agg_time),
+  lag2 = glm(toss_end ~ lag_1 + lag_2, family=binomial, data=df_agg_time),
+  lag3 = glm(toss_end ~ lag_1 + lag_2 + lag_3, family=binomial, data=df_agg_time)
 )
 
-print(comparison)
+# Compare models using AIC and Likelihood Ratio Tests
+AIC(lag_models$lag1, lag_models$lag2, lag_models$lag3)
+anova(lag_models$lag1, lag_models$lag2, test="Chisq")
+anova(lag_models$lag2, lag_models$lag3, test="Chisq")
+
 ```
+
+###### 2.4.2 Markov Chain Analysis
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+transition_table <- table(df_agg_time$lag_1, df_agg_time$toss_end)
+transition_table
+chisq.test(transition_table)
+
+transition_plot_df <- df_agg_time %>%
+  filter(!is.na(lag_1)) %>%
+  mutate(
+    prev_flip = factor(lag_1, levels = c("h", "t")),
+    curr_flip = factor(toss_end, levels = c("h", "t"))
+  ) %>%
+  group_by(prev_flip, curr_flip) %>%
+  tally() %>%
+  group_by(prev_flip) %>%
+  mutate(prob = n / sum(n)) %>%
+  ungroup()
+
+ggplot(transition_plot_df, aes(x = prev_flip, y = prob, fill = curr_flip)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Transition Probabilities (Markov Chain Analysis)",
+    x = "Previous Flip Outcome",
+    y = "Probability"
+  ) +
+  scale_fill_viridis_d(name = "Current Flip") +
+  theme_minimal()
+
+```
+
+###### 2.4.3 Learning Effects Model
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+df_agg_time <- df_agg_time %>%
+  group_by(person, sequence_id) %>%
+  mutate(flip_index = row_number()) %>%
+  ungroup()
+
+model_learning <- glm((toss_start == toss_end) ~ flip_index,
+                      family=binomial,
+                      data=df_agg_time)
+summary(model_learning)
+
+null_learning <- glm((toss_start == toss_end) ~ 1,
+                     family=binomial,
+                     data=df_agg_time)
+anova(null_learning, model_learning, test="Chisq")
+
+check_model(model_learning)
+
+```
+###### 2.4.4 Mixed-Effects Logistic Model
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+df_agg_time <- df_agg_time %>%
+  group_by(person, coin) %>%
+  mutate(
+    y = sum(toss_end == "h"),  # Successes
+    m = n()                    # Total tosses
+  ) %>%
+  ungroup()
+
+mixed_model <- glmer(cbind(y, m - y) ~ lag_1 + (1 | person/coin), family = binomial, data = df_agg_time)
+null_mixed <- glmer(cbind(y, m - y) ~ 1 + (1 | person/coin), family = binomial, data = df_agg_time)
+
+cat("\nMixed-Effects Logistic Model Summary:\n")
+print(summary(mixed_model))
+cat("\nLikelihood Ratio Test (Mixed vs Null):\n")
+print(anova(null_mixed, mixed_model, test = "Chisq"))
+
+dotplot(ranef(mixed_model), main = "Random Effects for Mixed Model")  # Random effects visualization
+
+performance::check_model(mixed_model)  # Model diagnostics
+
+```
+
+###### 2.4.5 Binomial Approximation (WLS)
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+binomial_data <- df_agg_time %>%
+  group_by(person, coin) %>%
+  summarise(
+    total_flips = n(),
+    total_success = sum(toss_start == toss_end),
+    proportion_success = total_success / total_flips,
+    weight = 4 * total_flips
+  ) %>%
+  ungroup()
+
+wls_model <- lm(proportion_success ~ 1, weights = weight, data = binomial_data)
+
+cat("\nWeighted Least Squares Model Summary:\n")
+print(summary(wls_model))
+
+# Residual diagnostics for WLS
+binomial_data <- binomial_data %>%
+  mutate(
+    fitted_values = predict(wls_model),
+    residuals = residuals(wls_model)
+  )
+
+ggplot(binomial_data, aes(x = fitted_values, y = residuals)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Residual Plot for WLS Model", x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+```
+
+##### AIC Comparison Across Models
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
+aic_values <- data.frame(
+  Model = c("Logistic Lag1", "Logistic Lag2", "Logistic Lag3", "Mixed Effects", "WLS"),
+  AIC = c(
+    AIC(logistic_models$lag1),
+    AIC(logistic_models$lag2),
+    AIC(logistic_models$lag3),
+    AIC(mixed_model),
+    AIC(wls_model)
+  )
+)
+
+cat("\nAIC Comparison Across Models:\n")
+print(aic_values)
+
+ggplot(aic_values, aes(x = Model, y = AIC)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "AIC Comparison Across Models", x = "Model", y = "AIC") +
+  theme_minimal()
+
+```
+
+
+
+#### info dump down here, will adapt to add to the report but not yet
+
 ## Results and Interpretation
 
 ### Simple Logistic Regression
@@ -505,14 +679,8 @@ This model highlights the importance of participant-level effects, but it assume
 
 Adding nested coin effects further improves the model, with a log-likelihood of \(-977.1\), AIC of \(1960.2\), and BIC of \(1970.3\). The reductions in AIC and BIC compared to the Participants-Only model suggest that including coin-specific effects improves the fit while managing complexity better.
 
-### Likelihood Ratio Tests
 
-We use likelihood ratio tests (LRTs) to formally compare the models:
 
-```{r}
-# Perform likelihood ratio tests for nested models
-anova(model_simple, glmm_participants, glmm_nested, test = "Chisq")
-```
 ## Simple vs. Participants Only
 
 The significant likelihood ratio test (\(p < 0.001\)) indicates that the participants-only model provides a much better fit to the data than the simple model. This improvement reflects the importance of capturing participant-specific variability.
@@ -532,198 +700,3 @@ While the participants-and-nested-coins model is the best-fitting model, the coi
 ## Conclusion
 
 The participants-and-nested-coins model provides the most accurate representation of the data, as it accounts for both participant and coin-specific variability. However, the relatively small coin-level variance suggests that participants are the primary source of variability in flipping outcomes. These findings highlight the importance of modeling hierarchical structures to capture the complexity of the data.
-
-
-## **Analysis of Learning Effects and Influence of Recent Flips**
-
-Building on the previous analysis, we now investigate whether participants exhibit **learning effects** (i.e., improving flipping consistency over time) and whether **recent flips influence the outcome** of the current flip. These analyses allow us to better understand behavioral trends and potential dependencies in flipping outcomes.
-
----
-
-### **Learning Effects**
-
-#### **Objective**
-
-To examine whether participants' probabilities of flipping a coin that lands on the same side improve over time, we analyze the relationship between the **flip sequence** (indexed by `flip_index`) and the probability of landing on the same side.
-
-#### **Approach**
-
-1. We include a sequential variable `flip_index` representing the order of flips for each participant.
-2. We model learning effects using a generalized linear mixed model (GLMM) with `flip_index` as a fixed effect and random intercepts for participants and coins.
-
-#### **Code and Results**
-
-```{r, message=FALSE, warning=FALSE}
-#| echo: true
-
-# Load the new dataset
-df_agg_time <- read_csv("C:/Users/mimav/OneDrive/Desktop/regression/df_agg-time.csv")
-# Ensure factors are properly set
-df_agg_time <- df_agg_time %>%
-  mutate(
-    person = factor(person),
-    coin = factor(coin),
-    toss_start = factor(toss_start),
-    toss_end = factor(toss_end)
-  )
-
-df_agg_time <- df_agg_time %>%
-  arrange(person, sequence_id, toss_number) %>%
-  group_by(person, sequence_id) %>%
-  mutate(
-    lag_1 = lag(toss_end, 1),  # Outcome of the previous flip
-    lag_2 = lag(toss_end, 2),  # Outcome of two flips ago
-    lag_3 = lag(toss_end, 3)   # Outcome of three flips ago
-  ) %>%
-  ungroup()
-# Check the first few rows
-head(df_agg_time)
-
-# Summarize the distribution of lagged variables
-summary(df_agg_time[, c("lag_1", "lag_2", "lag_3")])
-
-# Fit a logistic regression model to test the influence of recent flips
-model_recent_flips <- glm(
-  toss_end ~ lag_1 + lag_2 + lag_3, 
-  family = binomial, 
-  data = df_agg_time
-)
-
-# Summarize the model
-summary(model_recent_flips)
-```
-```{r}
-#| echo: true
-
-# Create a summary table of probabilities based on lagged outcomes
-lag_effects <- df_agg_time %>%
-  group_by(lag_1, lag_2, lag_3) %>%
-  summarise(
-    prob_heads = mean(toss_end == "h", na.rm = TRUE),
-    n = n()
-  ) %>%
-  filter(n > 10)  # Filter to include only combinations with sufficient observations
-
-# Plot the probabilities
-ggplot(lag_effects, aes(x = lag_1, y = prob_heads, fill = lag_2)) +
-  geom_col(position = "dodge") +
-  facet_wrap(~ lag_3, ncol = 2) +
-  labs(
-    title = "Effect of Recent Outcomes on Probability of Heads",
-    x = "Lag 1 (Previous Toss Outcome)",
-    y = "Probability of Heads",
-    fill = "Lag 2 Outcome"
-  ) +
-  theme_minimal()
-```
-
-
-```{r}
-#| echo: true
-
-# Include interaction terms in the logistic regression model
-model_interaction <- glm(
-  toss_end ~ lag_1 * lag_2 * lag_3, 
-  family = binomial, 
-  data = df_agg_time
-)
-
-# Summarize the model with interaction terms
-summary(model_interaction)
-```
-
-```{r}
-#| echo: true
-
-# Add a sequential flip index for learning effects
-df_agg_time <- df_agg_time %>%
-  arrange(person, sequence_id, toss_number) %>%
-  group_by(person, sequence_id) %>%
-  mutate(
-    flip_index = row_number()  # Sequential index for each flip within a sequence
-  ) %>%
-  ungroup()
-
-# Visualize trends in probability of heads over sequential flips
-learning_effects <- df_agg_time %>%
-  group_by(flip_index) %>%
-  summarise(
-    prob_heads = mean(toss_end == "h", na.rm = TRUE),
-    n = n()
-  )
-
-ggplot(learning_effects, aes(x = flip_index, y = prob_heads)) +
-  geom_line(color = "blue") +
-  geom_point(size = 2) +
-  labs(
-    title = "Learning Effects: Probability of Heads Over Sequential Flips",
-    x = "Flip Index (Sequential Number)",
-    y = "Probability of Heads"
-  ) +
-  theme_minimal()
-```
-
-```{r}
-#| echo: true
-
-# Fit a logistic regression model to investigate learning effects
-model_learning <- glm(
-  toss_end ~ flip_index, 
-  family = binomial, 
-  data = df_agg_time
-)
-
-# Summarize the learning effects model
-summary(model_learning)
-```
-
-```{r}
-#| echo: true
-
-# Create interaction terms between lagged outcomes and the sequential flip index
-df_agg_time <- df_agg_time %>%
-  mutate(
-    interaction_lag1_flip_index = as.numeric(lag_1 == "h") * flip_index,
-    interaction_lag2_flip_index = as.numeric(lag_2 == "h") * flip_index,
-    interaction_lag3_flip_index = as.numeric(lag_3 == "h") * flip_index
-  )
-
-# Fit a logistic regression model with interaction effects
-model_interaction <- glm(
-  toss_end == "h" ~ flip_index + lag_1 + lag_2 + lag_3 +
-    interaction_lag1_flip_index + interaction_lag2_flip_index + interaction_lag3_flip_index,
-  family = binomial,
-  data = df_agg_time
-)
-
-# Summarize the interaction model
-summary(model_interaction)
-```
-
-```{r}
-#| echo: true
-
-# Visualize interaction effects: Change in probability by flip index and recent flips
-interaction_effects <- df_agg_time %>%
-  mutate(
-    lag_1_numeric = as.numeric(lag_1 == "h"),
-    lag_2_numeric = as.numeric(lag_2 == "h"),
-    lag_3_numeric = as.numeric(lag_3 == "h")
-  ) %>%
-  group_by(flip_index, lag_1_numeric) %>%
-  summarise(
-    prob_heads = mean(toss_end == "h", na.rm = TRUE),
-    n = n()
-  )
-
-ggplot(interaction_effects, aes(x = flip_index, y = prob_heads, color = factor(lag_1_numeric))) +
-  geom_line() +
-  geom_point() +
-  labs(
-    title = "Interaction Effects: Probability of Heads by Flip Index and Lagged Outcome",
-    x = "Flip Index (Sequential Number)",
-    y = "Probability of Heads",
-    color = "Lagged Outcome (Lag 1)"
-  ) +
-  theme_minimal()
-```
