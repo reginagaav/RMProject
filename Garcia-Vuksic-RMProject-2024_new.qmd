@@ -8,12 +8,6 @@ header-includes:
   - \usepackage{bm}
 df_agg-engine: xelatex
 ---
-
-
-#### **1. Introduction and Exploratory Data Analysis**
-
-Our analysis begins with studying the patterns in the data to inform modeling. 
-
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Load necessary libraries
@@ -23,13 +17,21 @@ library(viridis)
 library(ggplot2)
 library(dplyr)
 library(performance)     # For check_model, etc.
-library(patchwork)       # For side-by-side plots
 library(lme4)            # For GLMM
 library(broom)
 library(broom.mixed)     # Tidy for mixed models
 library(car)             # For VIF
 library(lattice)         # For random-effects dotplot
+library(influence.ME)
 
+```
+
+To reproduce this code it is necessary to have the files data-agg.csv and df-time.csv. Please set the path to where 'data-agg.csv' and 'df-time.csv' are located.
+
+#### **1. Introduction and Exploratory Data Analysis**
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: false
 # Read the aggregated dataset
 df_agg <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coin data/analyses/data-agg.csv") %>%
   mutate(
@@ -80,9 +82,6 @@ df_agg_time <- read_csv("/Users/graceaverell/Desktop/EPFL/regression methods/coi
 # Check resulting data frame
 head(df_agg_time)
 
-dim(df_agg_time)
-
-
 ```
 
 ##### **1.1. EDA**
@@ -128,7 +127,6 @@ t.test(df_agg$prob_same_side, mu = 0.5, alternative = "two.sided")
 ```{r, message=FALSE, warning=FALSE}
 #| echo: false
 # Histogram of probabilities of landing on the same side
-
 fig1 <- ggplot(df_agg, aes(x = prob_same_side)) +
   geom_histogram(binwidth = 0.001, color = "black", fill = viridis(5)[2]) +
   labs(
@@ -194,76 +192,6 @@ participant_outliers <- participant_probs %>%
 
 print(participant_outliers)
 
-```
-
-**Coin-Level Analysis**
-
-```{r, message=FALSE, warning=FALSE}
-#| echo: false
-# Calculate coin-level probabilities
-coin_probs <- df_agg %>%
-  group_by(coin) %>%
-  summarise(
-    total_heads_heads = sum(heads_heads),
-    total_tails_tails = sum(tails_tails),
-    total_heads_up = sum(N_start_heads_up),
-    total_tails_up = sum(N_start_tails_up),
-    total_same_side = total_heads_heads + total_tails_tails,
-    total_flips = total_heads_up + total_tails_up,
-    prob_same_side = total_same_side / total_flips
-  )
-
-# Summary statistics at coin level
-coin_summary <- coin_probs %>%
-  summarise(
-    mean_prob = mean(prob_same_side),
-    median_prob = median(prob_same_side),
-    sd_prob = sd(prob_same_side)
-  )
-
-print(coin_summary)
-
-```
-
-```{r, message=FALSE, warning=FALSE}
-#| echo: false
-# Histogram of probabilities by coin
-fig3 <- ggplot(coin_probs, aes(x = prob_same_side)) +
-  geom_histogram(binwidth = 0.001, color = "black", fill = viridis(5)[4]) +
-  labs(
-    title = "Probability of Landing on the Same Side by Coin",
-    x = "Probability",
-    y = "Frequency"
-  ) +
-  theme_minimal()
-
-ggsave("fig3.png", plot = fig3, width = 8, height = 6, dpi = 300)
-```
-
-```{r}
-#| echo: false
-# Merge participant and coin histograms side by side
-fig_merged <- fig2 + fig3 + 
-  plot_layout(ncol = 2) & 
-  theme(plot.title = element_text(size = 12))
-
-ggsave("fig_merged.png", plot = fig_merged, width = 10, height = 5, dpi = 300)
-
-fig_merged
-
-```
-
-```{r,message=FALSE,warning=FALSE}
-#| echo: false
-# Identify coin outliers
-coin_outliers <- coin_probs %>%
-  filter(prob_same_side > mean(prob_same_side) + 2 * sd(prob_same_side) |
-           prob_same_side < mean(prob_same_side) - 2 * sd(prob_same_side))
-
-print(coin_outliers)
-```
-
-```{r,message=FALSE,warning=FALSE}
 # Calculate probabilities for person/coin combinations
 person_coin_probs <- df_agg %>%
   group_by(person, coin) %>%
@@ -275,8 +203,8 @@ person_coin_outliers <- person_coin_probs %>%
            prob_same_side < mean(prob_same_side) - 2 * sd(prob_same_side))
 
 print(person_coin_outliers)
-```
 
+```
 **Effect of Starting Side**
 
 ```{r, message=FALSE, warning=FALSE}
@@ -305,37 +233,23 @@ df_agg_long <- df_agg %>%
     values_to = "probability"
   ) %>%
   mutate(
-    starting_side = recode(starting_side,
-                           prob_heads_to_heads = "Heads Up",
-                           prob_tails_to_tails = "Tails Up")
+    starting_side = case_when(
+      starting_side == "prob_heads_to_heads" ~ "Heads Up",
+      starting_side == "prob_tails_to_tails" ~ "Tails Up"
+    )
   )
 
+# Summarize the data by starting side
 df_agg_long %>%
   group_by(starting_side) %>%
-  summarise(mean_prob = mean(probability, na.rm = TRUE),
-            sd_prob = sd(probability, na.rm = TRUE)) %>%
+  summarise(
+    mean_prob = mean(probability, na.rm = TRUE),
+    sd_prob = sd(probability, na.rm = TRUE)
+  ) %>%
   print()
 
+# Perform t-test
 t.test(probability ~ starting_side, data = df_agg_long)
-```
-
-```{r, message=FALSE, warning=FALSE}
-#| echo: false
-# Violin plot of probabilities by starting side
-fig4 <- ggplot(df_agg_long, aes(x = starting_side, y = probability, fill = starting_side)) +
-  geom_violin(trim = FALSE, alpha = 0.8, adjust = 0.75) +
-  geom_boxplot(width = 0.1, fill = "white", color = "black", outlier.shape = NA) +
-  geom_jitter(width = 0.15, alpha = 0.5, color = "black", size = 1) +
-  scale_fill_manual(values = c(viridis(5)[1], viridis(5)[5])) +
-  labs(
-    title = "Probability of Landing on the Same Side by Starting Side",
-    x = "Starting Side",
-    y = "Probability"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-ggsave("fig4.png", plot = fig4, width = 8, height = 6, dpi = 300)
 ```
 
 ```{r,message=FALSE,warning=FALSE}
@@ -368,13 +282,28 @@ summary(model_1)
 # Model diagnostics 
 check_model(model_1)
 
+
+#Refit without outlier participants
+df_filtered_2 <- df_agg %>%
+  filter(!(person %in% c("TianqiPeng", "JanYang")))
+
+model_1_filtered <- glm(
+  cbind(heads_heads, N_start_heads_up - heads_heads) ~ 1,
+  family = binomial,
+  data = df_filtered_2
+)
+
+summary(model_1_filtered)
+
+
 ```
 
 ##### 2.2 Random Intercepts for Participants Only
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
-# Fit a mixed-effects logistic regression model with random intercepts for participants
+
+# Mixed-effects logistic regression model with random intercepts for participants
 model_2 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
                              (1 | person),
                            family = binomial, data = df_agg)
@@ -388,7 +317,142 @@ check_model(model_2)
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
+# Which participants, if removed entirely, change the model fit the most?
+inf_mod2 <- influence(model_2, group = "person")
+summary(inf_mod2)
+plot(inf_mod2, which = "cook")
 
+# Extract Cook's distances for each participant
+cook_vals <- cooks.distance(inf_mod2)
+cook_df <- data.frame(
+  person = levels(df_agg$person),
+  cooks  = as.numeric(cook_vals)
+)
+
+# Sort them descending
+cook_df_sorted <- cook_df[order(-cook_df$cooks), ]
+head(cook_df_sorted, 10)
+
+# Refit model without the most influential participant and the two most influential participants
+df_filtered <- df_agg %>%
+  filter(!(person %in% c("TianqiPeng")))
+
+df_filtered_2 <- df_agg %>%
+  filter(!(person %in% c("TianqiPeng", "JanYang")))
+
+model_2_filtered <- glmer(
+  cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
+  (1 | person),
+  family = binomial, 
+  data = df_filtered
+)
+
+model_2_filtered_2 <- glmer(
+  cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
+  (1 | person),
+  family = binomial, 
+  data = df_filtered_2
+)
+
+summary(model_2_filtered)
+summary(model_2_filtered_2)
+
+# Filtering out the two influential participants (TianqiPeng and JanYang) led to lower AIC/BIC and higher log-likelihood, indicating a better-fitting model.
+
+# The random effect variance dropped significantly, confirming that the excluded participants introduced greater variability in the data, which has now been controlled.
+# The fixed effect estimates became more precise (lower standard errors) without compromising statistical significance.
+
+# The lower AIC values in the filtered models are partially influenced by the smaller n, however, the consistent improvement across AIC, BIC, log-likelihood, and precision metrics suggests that the filtered models are better specified rather than just benefiting from fewer data points.
+
+## Investigating probability of same side outcome 
+# Extract fixed effect estimates (log-odds) for all models
+beta_0 <- fixef(model_2)["(Intercept)"]
+beta_0_filtered <- fixef(model_2_filtered)["(Intercept)"]
+beta_0_filtered_2 <- fixef(model_2_filtered_2)["(Intercept)"]
+
+# Calculate standard errors
+se <- sqrt(vcov(model_2)["(Intercept)", "(Intercept)"])
+se_filtered <- sqrt(vcov(model_2_filtered)["(Intercept)", "(Intercept)"])
+se_filtered_2 <- sqrt(vcov(model_2_filtered_2)["(Intercept)", "(Intercept)"])
+
+# Compute probabilities
+prob <- exp(beta_0) / (1 + exp(beta_0))
+prob_filtered <- exp(beta_0_filtered) / (1 + exp(beta_0_filtered))
+prob_filtered_2 <- exp(beta_0_filtered_2) / (1 + exp(beta_0_filtered_2))
+
+# Display probabilities
+cat("Model 2 Probability: ", prob, "\n")
+cat("Model 2 Filtered Probability: ", prob_filtered, "\n")
+cat("Model 2 Filtered 2 Probability: ", prob_filtered_2, "\n")
+
+# Test differences in log-odds (z-tests)
+# Model 2 vs Model 2 Filtered
+z_1 <- (beta_0 - beta_0_filtered) / sqrt(se^2 + se_filtered^2)
+p_1 <- 2 * (1 - pnorm(abs(z_1)))
+
+# Model 2 vs Model 2 Filtered 2
+z_2 <- (beta_0 - beta_0_filtered_2) / sqrt(se^2 + se_filtered_2^2)
+p_2 <- 2 * (1 - pnorm(abs(z_2)))
+
+# Model 2 Filtered vs Model 2 Filtered 2
+z_3 <- (beta_0_filtered - beta_0_filtered_2) / sqrt(se_filtered^2 + se_filtered_2^2)
+p_3 <- 2 * (1 - pnorm(abs(z_3)))
+
+# Display z-scores and p-values for significance testing
+cat("Model 2 vs Model 2 Filtered: z =", z_1, ", p =", p_1, "\n")
+cat("Model 2 vs Model 2 Filtered 2: z =", z_2, ", p =", p_2, "\n")
+cat("Model 2 Filtered vs Model 2 Filtered 2: z =", z_3, ", p =", p_3, "\n")
+
+# Confidence intervals for probabilities
+ci <- beta_0 + c(-1.96, 1.96) * se
+ci_filtered <- beta_0_filtered + c(-1.96, 1.96) * se_filtered
+ci_filtered_2 <- beta_0_filtered_2 + c(-1.96, 1.96) * se_filtered_2
+
+# Transform to probability scale
+ci_prob <- exp(ci) / (1 + exp(ci))
+ci_prob_filtered <- exp(ci_filtered) / (1 + exp(ci_filtered))
+ci_prob_filtered_2 <- exp(ci_filtered_2) / (1 + exp(ci_filtered_2))
+
+# Display confidence intervals
+cat("Model 2 95% CI: [", ci_prob[1], ", ", ci_prob[2], "]\n")
+cat("Model 2 Filtered 95% CI: [", ci_prob_filtered[1], ", ", ci_prob_filtered[2], "]\n")
+cat("Model 2 Filtered 2 95% CI: [", ci_prob_filtered_2[1], ", ", ci_prob_filtered_2[2], "]\n")
+
+# None of the comparisons between models show statistically significant differences
+# filtering out influential participants did not substantially alter the estimated probabilities, , however it comes closer to a fair coin (p=0.5)
+
+
+# Are there still influential participants?
+inf_mod_filtered <- influence(model_2_filtered_2, group = "person")
+plot(inf_mod_filtered, which = "cook")
+
+# Check model assumptions again for filtered models
+check_model(model_2_filtered)
+check_model(model_2_filtered_2)
+
+# The original model overfit due to influential participants dominating variability, effectively masking residual issues.
+# The filtered model became more precise, but revealed residual patterns that need further exploration.
+
+# Plot residuals against fitted values
+plot(resid(model_2_filtered_2) ~ fitted(model_2_filtered_2), 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     main = "Residuals vs Fitted Values for Model 2 Filtered 2")
+abline(h = 0, col = "red", lty = 2)
+# Residuals are roughly centered around 0, with no strong systematic bias in the mean.
+# Vertical clustering suggests grouped data—due to participants contributing multiple observations.
+# Fanning Residuals could indicate overdispersion (variance higher than expected under a binomial model). Lets test for overdispersion
+overdispersion_test <- sum(residuals(model_2_filtered_2, type = "pearson")^2) / df.residual(model_2_filtered_2)
+cat("Overdispersion Statistic:", overdispersion_test, "\n")
+# mild overdispersion, binomial model is not severely mis-specified
+# QQ plot for residuals
+qqnorm(resid(model_2_filtered_2))
+qqline(resid(model_2_filtered_2), col = "red")
+# looks like a reasonably good fit
+```
+
+```{r, message=FALSE, warning=FALSE}
+#| echo: true
 # extract fixed and random effects
 fixed_effects_participants <- tidy(model_2, effects = "fixed")
 random_effects_participants <- tidy(model_2, effects = "ran_pars")
@@ -402,7 +466,7 @@ random_effects_participants
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
-# Fit a mixed-effects logistic regression model with nested random intercepts
+# Mixed-effects logistic regression model with nested random intercepts
 model_3 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
                       (1 | person/coin),
                     family = binomial, data = df_agg)
@@ -412,11 +476,130 @@ summary(model_3)
 # Model diagnostics
 check_model(model_3)
 ```
+```{r}
+# Which participants, if removed entirely, change the model fit the most?
+inf_mod3 <- influence(model_3, group = "person")
+summary(inf_mod3)
+plot(inf_mod3, which = "cook")
 
+# Extract Cook's distances for each participant
+cook_vals <- cooks.distance(inf_mod3)
+cook_df <- data.frame(
+  person = levels(df_agg$person),
+  cooks  = as.numeric(cook_vals)
+)
+
+# Sort them descending
+cook_df_sorted <- cook_df[order(-cook_df$cooks), ]
+head(cook_df_sorted, 10)
+
+# Refit model without the most influential participant and the two most influential participants
+df_filtered <- df_agg %>%
+  filter(!(person %in% c("TianqiPeng")))
+
+df_filtered_2 <- df_agg %>%
+  filter(!(person %in% c("TianqiPeng", "JanYang")))
+
+model_3_filtered <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
+                      (1 | person/coin),
+                    family = binomial, data = df_filtered)
+
+model_3_filtered_2 <- glmer(cbind(total_same_side, total_flips - total_same_side) ~ 1 + 
+                      (1 | person/coin),
+                    family = binomial, data = df_filtered_2)
+
+summary(model_3_filtered)
+summary(model_3_filtered_2)
+
+# Again, filtering out the two influential participants (TianqiPeng and JanYang) led to a better-fitting model, without changing the substantive conclusions.
+# Coins exhibit low variance in all models, reinforcing that variability is mostly participant-driven.
+
+## Investigating probability of same side outcome 
+# Extract fixed effect estimates (log-odds) for all models
+beta_0 <- fixef(model_3)["(Intercept)"]
+beta_0_filtered <- fixef(model_3_filtered)["(Intercept)"]
+beta_0_filtered_2 <- fixef(model_3_filtered_2)["(Intercept)"]
+
+# Calculate standard errors
+se <- sqrt(vcov(model_2)["(Intercept)", "(Intercept)"])
+se_filtered <- sqrt(vcov(model_3_filtered)["(Intercept)", "(Intercept)"])
+se_filtered_2 <- sqrt(vcov(model_3_filtered_2)["(Intercept)", "(Intercept)"])
+
+# Compute probabilities
+prob <- exp(beta_0) / (1 + exp(beta_0))
+prob_filtered <- exp(beta_0_filtered) / (1 + exp(beta_0_filtered))
+prob_filtered_2 <- exp(beta_0_filtered_2) / (1 + exp(beta_0_filtered_2))
+
+# Display probabilities
+cat("Model 3 Probability: ", prob, "\n")
+cat("Model 3 Filtered Probability: ", prob_filtered, "\n")
+cat("Model 3 Filtered 2 Probability: ", prob_filtered_2, "\n")
+
+# Test differences in log-odds (z-tests)
+# Model 2 vs Model 2 Filtered
+z_1 <- (beta_0 - beta_0_filtered) / sqrt(se^2 + se_filtered^2)
+p_1 <- 2 * (1 - pnorm(abs(z_1)))
+
+# Model 2 vs Model 2 Filtered 2
+z_2 <- (beta_0 - beta_0_filtered_2) / sqrt(se^2 + se_filtered_2^2)
+p_2 <- 2 * (1 - pnorm(abs(z_2)))
+
+# Model 2 Filtered vs Model 2 Filtered 2
+z_3 <- (beta_0_filtered - beta_0_filtered_2) / sqrt(se_filtered^2 + se_filtered_2^2)
+p_3 <- 2 * (1 - pnorm(abs(z_3)))
+
+# Display z-scores and p-values for significance testing
+cat("Model 2 vs Model 2 Filtered: z =", z_1, ", p =", p_1, "\n")
+cat("Model 2 vs Model 2 Filtered 2: z =", z_2, ", p =", p_2, "\n")
+cat("Model 2 Filtered vs Model 2 Filtered 2: z =", z_3, ", p =", p_3, "\n")
+
+# Confidence intervals for probabilities
+ci <- beta_0 + c(-1.96, 1.96) * se
+ci_filtered <- beta_0_filtered + c(-1.96, 1.96) * se_filtered
+ci_filtered_2 <- beta_0_filtered_2 + c(-1.96, 1.96) * se_filtered_2
+
+# Transform to probability scale
+ci_prob <- exp(ci) / (1 + exp(ci))
+ci_prob_filtered <- exp(ci_filtered) / (1 + exp(ci_filtered))
+ci_prob_filtered_2 <- exp(ci_filtered_2) / (1 + exp(ci_filtered_2))
+
+# Display confidence intervals
+cat("Model 2 95% CI: [", ci_prob[1], ", ", ci_prob[2], "]\n")
+cat("Model 2 Filtered 95% CI: [", ci_prob_filtered[1], ", ", ci_prob_filtered[2], "]\n")
+cat("Model 2 Filtered 2 95% CI: [", ci_prob_filtered_2[1], ", ", ci_prob_filtered_2[2], "]\n")
+
+# None of the comparisons between models show statistically significant differences
+# filtering out influential participants did not substantially alter the estimated probabilities, however it comes closer to a fair coin (p=0.5)
+
+# Are there still influential participants?
+inf_mod_filtered <- influence(model_3_filtered_2, group = "person")
+plot(inf_mod_filtered, which = "cook")
+
+# Check model assumptions again for filtered models
+check_model(model_3_filtered)
+check_model(model_3_filtered_2)
+
+performance::check_overdispersion(model_3_filtered_2)
+# variance is only slightly larger than expected under a binomial distribution
+# binomial model assumptions are not perfectly met
+
+# Plot residuals against fitted values
+plot(resid(model_3_filtered_2) ~ fitted(model_3_filtered_2), 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     main = "Residuals vs Fitted Values for Model 3 Filtered 2")
+abline(h = 0, col = "red", lty = 2)
+# A weak upward trend is noticeable as fitted values increase.
+# this aligns with the overdispersion ratio = 1.035 and p = 0.032 discussed earlier.
+
+# QQ plot for residuals
+qqnorm(resid(model_3_filtered_2))
+qqline(resid(model_3_filtered_2), col = "red")
+# slight deviations in tails, consistent with overdispersion or non-normality in residuals. The deviations are not extreme, suggesting the model is reasonably well-specified, but minor improvements could further stabilize the fit.
+```
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
-
 # extract fixed and random effects
 fixed_effects_nested <- tidy(model_3, effects = "fixed")
 random_effects_nested <- tidy(model_3, effects = "ran_pars")
@@ -487,7 +670,7 @@ fixef_3 <- tidy(model_3, effects = "fixed") %>%
   select(term, estimate, std.error, statistic, p.value) %>%
   mutate(Model = "Model 3")
 
-# Now all three data frames have the same columns and can be row-bound
+
 fixed_all <- rbind(fixef_1, fixef_2, fixef_3)
 fixed_all
 
@@ -504,9 +687,7 @@ ranef_3 <- tidy(model_3, effects = "ran_pars") %>% mutate(Model = "Model 3")
 rbind(ranef_2, ranef_3)
 
 ```
-##### 2.4 Analysis of Time Resolved Data
-
-###### 2.4.1 Logistic Models with Lagged Covariates
+##### 2.4 Influence of Recent Flips
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 lag_models <- list(
@@ -522,8 +703,7 @@ anova(lag_models$lag2, lag_models$lag3, test="Chisq")
 
 ```
 
-###### 2.4.2 Markov Chain Analysis
-
+######  Markov Chain Analysis
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
 transition_table <- table(df_agg_time$lag_1, df_agg_time$toss_end)
@@ -554,7 +734,7 @@ ggplot(transition_plot_df, aes(x = prev_flip, y = prob, fill = curr_flip)) +
 
 ```
 
-###### 2.4.3 Learning Effects Model
+##### 2.5 Learning Effects 
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
@@ -572,37 +752,14 @@ null_learning <- glm((toss_start == toss_end) ~ 1,
                      family=binomial,
                      data=df_agg_time)
 anova(null_learning, model_learning, test="Chisq")
+# Profile Likelihood Confidence Intervals
+confint(model_learning)
 
-check_model(model_learning)
-
-```
-###### 2.4.4 Mixed-Effects Logistic Model
-
-```{r, message=FALSE, warning=FALSE}
-#| echo: true
-df_agg_time <- df_agg_time %>%
-  group_by(person, coin) %>%
-  mutate(
-    y = sum(toss_end == "h"),  # Successes
-    m = n()                    # Total tosses
-  ) %>%
-  ungroup()
-
-mixed_model <- glmer(cbind(y, m - y) ~ lag_1 + (1 | person/coin), family = binomial, data = df_agg_time)
-null_mixed <- glmer(cbind(y, m - y) ~ 1 + (1 | person/coin), family = binomial, data = df_agg_time)
-
-cat("\nMixed-Effects Logistic Model Summary:\n")
-print(summary(mixed_model))
-cat("\nLikelihood Ratio Test (Mixed vs Null):\n")
-print(anova(null_mixed, mixed_model, test = "Chisq"))
-
-dotplot(ranef(mixed_model), main = "Random Effects for Mixed Model")  # Random effects visualization
-
-performance::check_model(mixed_model)  # Model diagnostics
+#check_model(model_learning)
 
 ```
 
-###### 2.4.5 Binomial Approximation (WLS)
+###### 2.6 Binomial Approximation (WLS)
 
 ```{r, message=FALSE, warning=FALSE}
 #| echo: true
@@ -618,7 +775,6 @@ binomial_data <- df_agg_time %>%
 
 wls_model <- lm(proportion_success ~ 1, weights = weight, data = binomial_data)
 
-cat("\nWeighted Least Squares Model Summary:\n")
 print(summary(wls_model))
 
 # Residual diagnostics for WLS
@@ -632,71 +788,131 @@ ggplot(binomial_data, aes(x = fitted_values, y = residuals)) +
   geom_point(alpha = 0.5) +
   labs(title = "Residual Plot for WLS Model", x = "Fitted Values", y = "Residuals") +
   theme_minimal()
+check_model(wls_model)
 
-```
+# Remove the two identified outliers (TianqiPeng and JanYang)
+df_filtered_2 <- df_agg_time %>%
+  filter(!(person %in% c("TianqiPeng", "JanYang")))
 
-##### AIC Comparison Across Models
-
-```{r, message=FALSE, warning=FALSE}
-#| echo: true
-aic_values <- data.frame(
-  Model = c("Logistic Lag1", "Logistic Lag2", "Logistic Lag3", "Mixed Effects", "WLS"),
-  AIC = c(
-    AIC(logistic_models$lag1),
-    AIC(logistic_models$lag2),
-    AIC(logistic_models$lag3),
-    AIC(mixed_model),
-    AIC(wls_model)
+# Prepare Data for WLS Model
+binomial_data_filtered <- df_filtered_2 %>%
+  group_by(person, coin) %>%
+  summarise(
+    total_flips = n(),
+    total_success = sum(toss_start == toss_end),
+    proportion_success = total_success / total_flips,
+    weight = 4 * total_flips,
+    .groups = "drop"
   )
-)
 
-cat("\nAIC Comparison Across Models:\n")
-print(aic_values)
+# Fit Weighted Least Squares (WLS) Model
+wls_model_filtered <- lm(proportion_success ~ 1, weights = weight, data = binomial_data_filtered)
 
-ggplot(aic_values, aes(x = Model, y = AIC)) +
-  geom_bar(stat = "identity", fill = "steelblue") +
-  labs(title = "AIC Comparison Across Models", x = "Model", y = "AIC") +
+# Summarize the WLS Model
+print(summary(wls_model_filtered))
+
+# Residual Diagnostics
+# Add fitted values and residuals for diagnostics
+binomial_data_filtered <- binomial_data_filtered %>%
+  mutate(
+    fitted_values = predict(wls_model_filtered),
+    residuals = residuals(wls_model_filtered)
+  )
+
+# Plot residuals
+ggplot(binomial_data_filtered, aes(x = fitted_values, y = residuals)) +
+  geom_point(alpha = 0.5) +
+  labs(
+    title = "Residual Plot for Filtered WLS Model",
+    x = "Fitted Values",
+    y = "Residuals"
+  ) +
   theme_minimal()
 
+# Perform Model Diagnostics
+cat("\nCheck Model Diagnostics for Filtered WLS Model:\n")
+check_model(wls_model_filtered)
+
+# Fit WLS Model on Full Dataset
+# Prepare the data for the full dataset
+binomial_data_full <- df_agg_time %>%
+  group_by(person, coin) %>%
+  summarise(
+    total_flips = n(),
+    total_success = sum(toss_start == toss_end),
+    proportion_success = total_success / total_flips,
+    weight = 4 * total_flips,
+    .groups = "drop"
+  )
+
+# Fit WLS model on the full dataset
+wls_model_full <- lm(proportion_success ~ 1, weights = weight, data = binomial_data_full)
+
+# Get overall probability estimate from the full dataset
+overall_prob_full <- coef(wls_model_full)["(Intercept)"]
+
+# Fit WLS Model on Filtered Dataset
+# Prepare the data for the filtered dataset
+binomial_data_filtered <- df_agg_time %>%
+  filter(!(person %in% c("TianqiPeng", "JanYang"))) %>%
+  group_by(person, coin) %>%
+  summarise(
+    total_flips = n(),
+    total_success = sum(toss_start == toss_end),
+    proportion_success = total_success / total_flips,
+    weight = 4 * total_flips,
+    .groups = "drop"
+  )
+
+# Fit WLS model on the filtered dataset
+wls_model_filtered <- lm(proportion_success ~ 1, weights = weight, data = binomial_data_filtered)
+
+# Get overall probability estimate from the filtered dataset
+overall_prob_filtered <- coef(wls_model_filtered)["(Intercept)"]
+
+# Compare Overall Probabilities
+cat("Overall Probability (Full Dataset):", overall_prob_full, "\n")
+cat("Overall Probability (Filtered Dataset):", overall_prob_filtered, "\n")
+
+# Difference in probabilities
+prob_diff <- overall_prob_filtered - overall_prob_full
+cat("Change in Overall Probability After Removing Outliers:", prob_diff, "\n")
+
+# Extract Estimates and Standard Errors
+# For the full dataset
+full_estimate <- coef(wls_model_full)["(Intercept)"]
+full_se <- summary(wls_model_full)$coefficients["(Intercept)", "Std. Error"]
+
+# For the filtered dataset
+filtered_estimate <- coef(wls_model_filtered)["(Intercept)"]
+filtered_se <- summary(wls_model_filtered)$coefficients["(Intercept)", "Std. Error"]
+
+# Perform Z-Test
+# Calculate the difference in estimates
+estimate_diff <- filtered_estimate - full_estimate
+
+# Calculate the pooled standard error
+pooled_se <- sqrt(full_se^2 + filtered_se^2)
+
+# Compute the z-statistic
+z_value <- estimate_diff / pooled_se
+
+# Calculate the p-value (two-tailed test)
+p_value <- 2 * pnorm(-abs(z_value))
+
+# Output Results
+cat("Estimate (Full Dataset):", full_estimate, "\n")
+cat("Estimate (Filtered Dataset):", filtered_estimate, "\n")
+cat("Difference in Estimates:", estimate_diff, "\n")
+cat("Pooled Standard Error:", pooled_se, "\n")
+cat("Z-Value:", z_value, "\n")
+cat("P-Value:", p_value, "\n")
+
+# Interpretation
+if (p_value < 0.05) {
+  cat("The change in overall probability is statistically significant (p < 0.05).\n")
+} else {
+  cat("The change in overall probability is NOT statistically significant (p >= 0.05).\n")
+}
+
 ```
-
-
-
-#### info dump down here, will adapt to add to the report but not yet
-
-## Results and Interpretation
-
-### Simple Logistic Regression
-
-The Simple Logistic Regression model has the highest log-likelihood (\(-868.8\)) and the lowest AIC (\(1739.6\)) and BIC (\(1742.9\)). This is because it assumes all flips are independent and identically distributed, which simplifies the model. However, this simplicity comes at the cost of ignoring the hierarchical structure of the data, such as variability between participants and coins.
-
-### Participants-Only Model
-
-Adding random intercepts for participants reduces the log-likelihood (\(-981.7\)) and increases both AIC (\(1967.4\)) and BIC (\(1974.1\)) compared to the simple model. This indicates that accounting for participant-specific variability improves the model fit but also adds complexity, as evidenced by the higher AIC and BIC values.  
-This model highlights the importance of participant-level effects, but it assumes that all coins behave identically, which may not fully capture the variability in the data.
-
-### Participants and Nested Coins Model
-
-Adding nested coin effects further improves the model, with a log-likelihood of \(-977.1\), AIC of \(1960.2\), and BIC of \(1970.3\). The reductions in AIC and BIC compared to the Participants-Only model suggest that including coin-specific effects improves the fit while managing complexity better.
-
-
-
-## Simple vs. Participants Only
-
-The significant likelihood ratio test (\(p < 0.001\)) indicates that the participants-only model provides a much better fit to the data than the simple model. This improvement reflects the importance of capturing participant-specific variability.
-
-## Participants Only vs. Participants and Nested Coins
-
-The likelihood ratio test (\(p = 0.0025\)) supports the inclusion of nested coin effects, confirming that the additional complexity is justified.
-
-## Key Takeaways
-
-- **Simple Model**: Provides a good baseline but ignores variability due to participants and coins, which limits its explanatory power.
-- **Participants-Only Model**: Captures participant-specific variability and significantly improves the fit over the simple model.
-- **Participants and Nested Coins Model**: Further improves the model by accounting for coin-specific effects, although the improvement is smaller compared to the step from the simple model to the participants-only model. Participant-level variability remains the dominant factor.
-
-While the participants-and-nested-coins model is the best-fitting model, the coin-level variability (\(\sigma_{\delta(j)}^2\)) is relatively small compared to participant-level variability (\(\sigma_{\gamma}^2\)). This suggests that flipping outcomes are primarily driven by participant-specific behavior rather than coin-specific characteristics.
-
-## Conclusion
-
-The participants-and-nested-coins model provides the most accurate representation of the data, as it accounts for both participant and coin-specific variability. However, the relatively small coin-level variance suggests that participants are the primary source of variability in flipping outcomes. These findings highlight the importance of modeling hierarchical structures to capture the complexity of the data.
